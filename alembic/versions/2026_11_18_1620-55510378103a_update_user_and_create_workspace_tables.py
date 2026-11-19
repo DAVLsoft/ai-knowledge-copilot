@@ -83,6 +83,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_workspaces")),
     )
 
+
 def downgrade() -> None:
     """Downgrade schema."""
 

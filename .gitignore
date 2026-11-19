@@ -21,3 +21,6 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Uploaded files
+uploads/
