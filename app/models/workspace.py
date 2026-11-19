@@ -27,6 +27,7 @@ class Workspace(TimestampMixin, Base):
         Uuid,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     owner: Mapped["User"] = relationship(

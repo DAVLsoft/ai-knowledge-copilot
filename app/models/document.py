@@ -29,6 +29,7 @@ class Document(TimestampMixin, Base):
         Uuid,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     filename: Mapped[str] = mapped_column(
         String(255),
