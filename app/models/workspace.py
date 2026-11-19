@@ -9,6 +9,7 @@ from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
+    from app.models.document import Document
 
 
 class Workspace(TimestampMixin, Base):
@@ -31,4 +32,9 @@ class Workspace(TimestampMixin, Base):
 
     owner: Mapped["User"] = relationship(
         back_populates="workspaces",
+    )
+    documents: Mapped[list["Document"]] = relationship(
+        back_populates="workspace",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
