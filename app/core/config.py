@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import SecretStr
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     postgres_user: str
     postgres_password: SecretStr
     postgres_db: str
+
+    uploads_dir: Path = Path("uploads")
 
     @property
     def database_url(self) -> URL:
