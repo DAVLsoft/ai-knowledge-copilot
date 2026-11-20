@@ -12,19 +12,26 @@ def validate_password_size(value: SecretStr) -> SecretStr:
 Password = Annotated[SecretStr, Field(min_length=1), AfterValidator(validate_password_size)]
 
 
-class LoginRequest(BaseModel):
+class RegisterRequest(BaseModel):
     email: EmailStr = Field(max_length=320)
-    password: Password
+    username: str = Field(min_length=1, max_length=150)
+    password: Annotated[Password, Field(min_length=8)]
+    full_name: str | None = Field(default=None, max_length=255)
 
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: str) -> str:
         return value.lower()
 
-
-class RegisterRequest(LoginRequest):
-    password: Annotated[Password, Field(min_length=8)]
-    full_name: str | None = Field(default=None, max_length=255)
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Username cannot be empty")
+        if "@" in value:
+            raise ValueError("Username cannot contain '@'")
+        return value
 
 
 class TokenRead(BaseModel):
