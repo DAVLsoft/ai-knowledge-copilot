@@ -23,6 +23,8 @@ jobs:
       POSTGRES_USER: ci
       POSTGRES_PASSWORD: ci
       POSTGRES_DB: ci
+      # Public test-only key; never use it in a deployed environment.
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-at-least-32-bytes
     steps:
       - uses: actions/checkout@v7
 

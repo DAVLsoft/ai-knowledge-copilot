@@ -1,31 +1,18 @@
 from collections.abc import Sequence
+from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.schemas.user import UserCreate
 
 
-class UserAlreadyExistsError(Exception):
-    pass
-
-
-async def create_user(session: AsyncSession, data: UserCreate) -> User:
-    user = User(**data.model_dump())
-    session.add(user)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise UserAlreadyExistsError(data.email) from exc
-    await session.refresh(user)
-    return user
-
-
-async def get_user(session: AsyncSession, user_id: int) -> User | None:
+async def get_user(session: AsyncSession, user_id: UUID) -> User | None:
     return await session.get(User, user_id)
+
+
+async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
+    return await session.scalar(select(User).where(User.email == email))
 
 
 async def list_users(session: AsyncSession, *, offset: int = 0, limit: int = 50) -> Sequence[User]:
