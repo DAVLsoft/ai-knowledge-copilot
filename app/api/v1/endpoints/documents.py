@@ -4,8 +4,10 @@ from typing import Annotated
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.api.deps import CurrentUser, SessionDep
+from app.schemas.document import DocumentRead
 from app.services.document import (
     DocumentNotFoundError,
+    FileTooLargeError,
     UnsupportedFileTypeError,
     WorkspaceNotFoundError,
     create_document,
@@ -21,6 +23,7 @@ router = APIRouter(tags=["Documents"])
 @router.post(
     "/workspaces/{workspace_id}/documents",
     status_code=status.HTTP_201_CREATED,
+    response_model=DocumentRead,
 )
 async def upload_document(
     workspace_id: uuid.UUID,
@@ -45,6 +48,11 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported file format. Allowed formats: PDF, TXT, DOCX",
         ) from None
+    except FileTooLargeError:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds the maximum allowed size of 10 MB",
+        ) from None
 
     return document
 
@@ -52,6 +60,7 @@ async def upload_document(
 @router.get(
     "/workspaces/{workspace_id}/documents",
     status_code=status.HTTP_200_OK,
+    response_model=list[DocumentRead],
 )
 async def list_documents(
     workspace_id: uuid.UUID,

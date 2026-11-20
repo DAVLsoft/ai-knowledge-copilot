@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
 from app.services.ingestion import trigger_ingestion
-from app.storage.local import delete_file, save_file
+from app.storage.local import (
+    FileTooLargeError as StorageFileTooLargeError,
+)
+from app.storage.local import (
+    delete_file,
+    save_file,
+)
 
 
 class WorkspaceNotFoundError(Exception):
@@ -20,6 +26,10 @@ class UnsupportedFileTypeError(Exception):
 
 
 class DocumentNotFoundError(Exception):
+    pass
+
+
+class FileTooLargeError(Exception):
     pass
 
 
@@ -42,7 +52,10 @@ async def create_document(
         if file_extension not in allowed_extensions:
             raise UnsupportedFileTypeError()
 
-        file_path = await save_file(file)
+        try:
+            file_path = await save_file(file)
+        except StorageFileTooLargeError:
+            raise FileTooLargeError() from None
 
         document = Document(
             workspace_id=workspace.id,
