@@ -16,7 +16,6 @@ class RegisterRequest(BaseModel):
     email: EmailStr = Field(max_length=320)
     username: str = Field(min_length=1, max_length=150)
     password: Annotated[Password, Field(min_length=8)]
-    full_name: str | None = Field(default=None, max_length=255)
 
     @field_validator("email")
     @classmethod
@@ -25,8 +24,8 @@ class RegisterRequest(BaseModel):
 
     @field_validator("username")
     @classmethod
-    def validate_username(cls, value: str) -> str:
-        value = value.strip()
+    def normalize_username(cls, value: str) -> str:
+        value = value.strip().lower()
         if not value:
             raise ValueError("Username cannot be empty")
         if "@" in value:

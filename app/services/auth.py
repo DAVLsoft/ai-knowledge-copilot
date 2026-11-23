@@ -42,7 +42,6 @@ async def register_user(session: AsyncSession, data: RegisterRequest) -> User:
         email=email,
         username=data.username,
         hashed_password=await hash_password(data.password.get_secret_value()),
-        full_name=data.full_name,
     )
 
     user.workspaces = [Workspace(name="My Workspace")]
@@ -65,10 +64,12 @@ async def authenticate_user(
     identifier: str,
     password: str,
 ) -> User | None:
+    identifier = identifier.strip()
+
     if "@" in identifier:
         user = await get_user_by_email(session, identifier.lower())
     else:
-        user = await get_user_by_username(session, identifier)
+        user = await get_user_by_username(session, identifier.lower())
 
     if user is None:
         return None

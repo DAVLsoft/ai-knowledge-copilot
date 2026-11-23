@@ -1,7 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 
 from app.api.deps import SessionDep
 from app.core.security import create_access_token
@@ -9,6 +8,17 @@ from app.models.user import User
 from app.schemas.auth import RegisterRequest, TokenRead
 from app.schemas.user import UserRead
 from app.services.auth import UserAlreadyExistsError, authenticate_user, register_user
+
+
+class LoginForm:
+    def __init__(
+        self,
+        username: str = Form(),
+        password: str = Form(),
+    ):
+        self.username = username
+        self.password = password
+
 
 router = APIRouter(tags=["auth"])
 
@@ -30,7 +40,7 @@ async def register(data: RegisterRequest, session: SessionDep) -> User:
 
 @router.post("/login", responses={401: {"description": "Invalid username or password"}})
 async def login(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    form_data: Annotated[LoginForm, Depends()],
     session: SessionDep,
 ) -> TokenRead:
     user = await authenticate_user(
