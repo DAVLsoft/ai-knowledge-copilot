@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import UnauthorizedError
 from app.core.security import decode_access_token
 from app.db.session import get_session
 from app.models.user import User
@@ -19,11 +20,7 @@ async def get_current_user(
     session: SessionDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> User:
-    unauthorized = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    unauthorized = UnauthorizedError("Could not validate credentials")
     if credentials is None:
         raise unauthorized
     try:
