@@ -8,7 +8,11 @@ from tests.integration.factories import create_user
 
 async def test_list_users_paginates(client: AsyncClient, db_session: AsyncSession) -> None:
     for i in range(3):
-        await create_user(db_session, email=f"u{i}@example.com")
+        await create_user(
+            db_session,
+            email=f"u{i}@example.com",
+            username=f"user{i}",
+        )
 
     everyone = await client.get("/api/v1/users")
     page = await client.get("/api/v1/users", params={"limit": 2, "offset": 1})
