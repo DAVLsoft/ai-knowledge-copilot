@@ -12,3 +12,8 @@ setup:
 		mv "$$tmp" .env; \
 		printf '%s\n' 'Created .env with a generated JWT_SECRET_KEY.'; \
 	fi
+
+.PHONY: test
+
+test:
+	uv run pytest
