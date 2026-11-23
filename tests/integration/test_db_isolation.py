@@ -4,7 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 
-PAYLOAD = {"email": "iso@example.com", "password": "S3cure-pass-123", "full_name": "Iso"}
+PAYLOAD = {
+    "email": "iso@example.com",
+    "username": "iso",
+    "password": "S3cure-pass-123",
+}
 
 
 async def test_readiness_uses_test_db(client: AsyncClient) -> None:
