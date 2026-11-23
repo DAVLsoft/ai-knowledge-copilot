@@ -7,6 +7,5 @@ class ValidationIssue(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    code: str
-    message: str
+    detail: str
     details: list[ValidationIssue] | None = None

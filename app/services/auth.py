@@ -11,7 +11,7 @@ from app.schemas.auth import RegisterRequest
 from app.services.user import get_user_by_email, get_user_by_username
 
 
-def is_duplicate_email(exc: IntegrityError) -> bool:
+def is_duplicate_identity(exc: IntegrityError) -> bool:
     original = exc.orig
     cause = getattr(original, "__cause__", None)
 
@@ -48,8 +48,8 @@ async def register_user(session: AsyncSession, data: RegisterRequest) -> User:
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
-        if is_duplicate_email(exc):
-            raise UserAlreadyExistsError("Email already registered") from exc
+        if is_duplicate_identity(exc):
+            raise UserAlreadyExistsError("Username or email already registered") from exc
         raise
 
     await session.refresh(user)
@@ -60,7 +60,7 @@ async def authenticate_user(
     session: AsyncSession,
     identifier: str,
     password: str,
-) -> User | None:
+) -> User:
     identifier = identifier.strip()
 
     if "@" in identifier:
@@ -69,10 +69,10 @@ async def authenticate_user(
         user = await get_user_by_username(session, identifier.lower())
 
     if user is None:
-        return None
+        raise UnauthorizedError("Invalid username or password")
 
     valid_password = await verify_password(password, user.hashed_password)
 
     if not valid_password or not user.is_active:
-        raise UnauthorizedError("Invalid email or password")
+        raise UnauthorizedError("Invalid username or password")
     return user

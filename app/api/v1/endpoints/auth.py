@@ -1,7 +1,7 @@
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Form, status
 
 from app.api.deps import SessionDep
 from app.core.security import create_access_token
@@ -20,6 +20,7 @@ class LoginForm:
     ):
         self.username = username
         self.password = password
+
 
 router = APIRouter(tags=["auth"], responses=documented_errors(HTTPStatus.UNPROCESSABLE_ENTITY))
 

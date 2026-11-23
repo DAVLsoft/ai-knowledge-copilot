@@ -21,10 +21,8 @@ from app.schemas.error import ErrorResponse, ValidationIssue
 
 logger = logging.getLogger(__name__)
 
-BEARER_HEADERS = {"WWW-Authenticate": "Bearer"}
 DOMAIN_STATUSES: dict[type[AppError], HTTPStatus] = {
     BadRequestError: HTTPStatus.BAD_REQUEST,
-    UnauthorizedError: HTTPStatus.UNAUTHORIZED,
     ForbiddenError: HTTPStatus.FORBIDDEN,
     NotFoundError: HTTPStatus.NOT_FOUND,
     ConflictError: HTTPStatus.CONFLICT,
@@ -41,13 +39,11 @@ def error_response(
 
 
 async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, UnauthorizedError):
+        return error_response(exc.status_code, ErrorResponse(detail=exc.detail), exc.headers)
     for error_type, status in DOMAIN_STATUSES.items():
         if isinstance(exc, error_type):
-            return error_response(
-                status,
-                ErrorResponse(code=exc.error_code, message=str(exc) or status.phrase),
-                headers=BEARER_HEADERS if status == HTTPStatus.UNAUTHORIZED else None,
-            )
+            return error_response(status, ErrorResponse(detail=str(exc) or status.phrase))
     return await handle_unexpected_error(request, exc)
 
 
@@ -56,7 +52,7 @@ async def handle_validation_error(_: Request, exception: Exception) -> JSONRespo
     details = [ValidationIssue(loc=issue["loc"], type=issue["type"]) for issue in exc.errors()]
     return error_response(
         HTTPStatus.UNPROCESSABLE_ENTITY,
-        ErrorResponse(code="validation_error", message="Invalid request", details=details),
+        ErrorResponse(detail="Invalid request", details=details),
     )
 
 
@@ -65,18 +61,17 @@ async def handle_http_error(request: Request, exception: Exception) -> JSONRespo
     if exc.status_code == HTTPStatus.INTERNAL_SERVER_ERROR:
         return await handle_unexpected_error(request, exc)
     try:
-        status = HTTPStatus(exc.status_code)
-        code, message = status.name.lower(), status.phrase
+        message = HTTPStatus(exc.status_code).phrase
     except ValueError:
-        code, message = "http_error", "Request failed"
-    return error_response(exc.status_code, ErrorResponse(code=code, message=message), exc.headers)
+        message = "Request failed"
+    return error_response(exc.status_code, ErrorResponse(detail=message), exc.headers)
 
 
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     logger.error("Unhandled API exception during %s", request.method, exc_info=exc)
     return error_response(
         HTTPStatus.INTERNAL_SERVER_ERROR,
-        ErrorResponse(code="internal_error", message="Internal server error"),
+        ErrorResponse(detail="Internal server error"),
     )
 
 

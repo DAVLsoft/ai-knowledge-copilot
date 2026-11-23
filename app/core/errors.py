@@ -1,30 +1,40 @@
+from http import HTTPStatus
+
+from fastapi import HTTPException
+
+
 class AppError(Exception):
-    error_code = "internal_error"
+    pass
 
 
 class BadRequestError(AppError):
-    error_code = "bad_request"
+    pass
 
 
-class UnauthorizedError(AppError):
-    error_code = "unauthorized"
+class UnauthorizedError(AppError, HTTPException):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail=message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 class ForbiddenError(AppError):
-    error_code = "forbidden"
+    pass
 
 
 class NotFoundError(AppError):
-    error_code = "not_found"
+    pass
 
 
 class ConflictError(AppError):
-    error_code = "conflict"
+    pass
 
 
 class UserAlreadyExistsError(ConflictError):
-    error_code = "user_already_exists"
+    pass
 
 
 class ServiceUnavailableError(AppError):
-    error_code = "service_unavailable"
+    pass

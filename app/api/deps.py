@@ -5,8 +5,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import UnauthorizedError
 from app.core.config import settings
+from app.core.errors import UnauthorizedError
 from app.core.security import decode_access_token
 from app.db.session import get_session
 from app.models.user import User
