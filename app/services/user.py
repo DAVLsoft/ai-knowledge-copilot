@@ -15,6 +15,10 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     return await session.scalar(select(User).where(User.email == email))
 
 
+async def get_user_by_username(session: AsyncSession, username: str) -> User | None:
+    return await session.scalar(select(User).where(User.username == username))
+
+
 async def list_users(session: AsyncSession, *, offset: int = 0, limit: int = 50) -> Sequence[User]:
     result = await session.scalars(select(User).order_by(User.id).offset(offset).limit(limit))
     return result.all()

@@ -18,6 +18,12 @@ class User(TimestampMixin, Base):
         primary_key=True,
         default=uuid.uuid4,
     )
+    username: Mapped[str] = mapped_column(
+        String(150),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
     email: Mapped[str] = mapped_column(
         String(320),
         unique=True,
@@ -28,6 +34,7 @@ class User(TimestampMixin, Base):
         String(255),
         nullable=False,
     )
+
     full_name: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,

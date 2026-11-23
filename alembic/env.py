@@ -11,8 +11,8 @@ from app.models import Base
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
@@ -36,7 +36,10 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    connectable = create_async_engine(settings.database_url, poolclass=pool.NullPool)
+    connectable = create_async_engine(
+        config.attributes.get("database_url") or settings.database_url,
+        poolclass=pool.NullPool,
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
