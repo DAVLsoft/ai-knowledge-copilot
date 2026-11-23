@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -14,6 +15,8 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     backend_cors_origins: list[str] = []
+
+    upload_dir: Path = Path("uploads")
 
     jwt_secret_key: SecretStr
     jwt_access_token_expire_minutes: int = Field(default=30, gt=0)
