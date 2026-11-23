@@ -39,9 +39,7 @@ async def test_register_duplicate_email_returns_409(client: AsyncClient) -> None
     )
 
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": "Username or email already registered"
-    }
+    assert response.json() == {"detail": "Username or email already registered"}
 
 
 async def test_login_returns_working_token(
