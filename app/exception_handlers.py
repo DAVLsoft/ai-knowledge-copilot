@@ -73,7 +73,7 @@ async def handle_http_error(request: Request, exception: Exception) -> JSONRespo
 
 
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-    logger.error("Unhandled API exception during %s: %s", request.method, type(exc).__name__)
+    logger.error("Unhandled API exception during %s", request.method, exc_info=exc)
     return error_response(
         HTTPStatus.INTERNAL_SERVER_ERROR,
         ErrorResponse(code="internal_error", message="Internal server error"),
