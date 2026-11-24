@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.db.session import engine
+from app.exception_handlers import register_exception_handlers
 
 
 @asynccontextmanager
@@ -18,7 +19,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.project_name,
-        debug=settings.debug,
+        debug=False,
         openapi_url=f"{settings.api_v1_prefix}/openapi.json",
         docs_url=None if settings.environment == "production" else "/docs",
         redoc_url=None,
@@ -35,6 +36,8 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+    register_exception_handlers(app)
+
     return app
 
 

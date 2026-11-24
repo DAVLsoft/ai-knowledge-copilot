@@ -1,13 +1,15 @@
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Form, status
 
 from app.api.deps import SessionDep
 from app.core.security import create_access_token
+from app.exception_handlers import documented_errors
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, TokenRead
 from app.schemas.user import UserRead
-from app.services.auth import UserAlreadyExistsError, authenticate_user, register_user
+from app.services.auth import authenticate_user, register_user
 
 
 class LoginForm:
@@ -20,25 +22,20 @@ class LoginForm:
         self.password = password
 
 
-router = APIRouter(tags=["auth"])
+router = APIRouter(tags=["auth"], responses=documented_errors(HTTPStatus.UNPROCESSABLE_ENTITY))
 
 
 @router.post(
     "/register",
     status_code=status.HTTP_201_CREATED,
     response_model=UserRead,
-    responses={409: {"description": "Username or email already registered"}},
+    responses=documented_errors(HTTPStatus.CONFLICT),
 )
 async def register(data: RegisterRequest, session: SessionDep) -> User:
-    try:
-        return await register_user(session, data)
-    except UserAlreadyExistsError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Username or email already registered"
-        ) from exc
+    return await register_user(session, data)
 
 
-@router.post("/login", responses={401: {"description": "Invalid username or password"}})
+@router.post("/login", responses=documented_errors(HTTPStatus.UNAUTHORIZED))
 async def login(
     form_data: Annotated[LoginForm, Depends()],
     session: SessionDep,
@@ -48,10 +45,4 @@ async def login(
         form_data.username,
         form_data.password,
     )
-    if user is None:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            "Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     return TokenRead(access_token=create_access_token(user.id))

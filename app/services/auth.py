@@ -3,15 +3,12 @@ import uuid
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import UnauthorizedError, UserAlreadyExistsError
 from app.core.security import hash_password, verify_password
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.schemas.auth import RegisterRequest
 from app.services.user import get_user_by_email, get_user_by_username
-
-
-class UserAlreadyExistsError(Exception):
-    pass
 
 
 def is_duplicate_identity(exc: IntegrityError) -> bool:
@@ -35,7 +32,7 @@ async def register_user(session: AsyncSession, data: RegisterRequest) -> User:
         or await get_user_by_email(session, data.username)
         or await get_user_by_username(session, email)
     ):
-        raise UserAlreadyExistsError
+        raise UserAlreadyExistsError("Username or email already registered")
 
     user = User(
         id=uuid.uuid4(),
@@ -52,7 +49,7 @@ async def register_user(session: AsyncSession, data: RegisterRequest) -> User:
     except IntegrityError as exc:
         await session.rollback()
         if is_duplicate_identity(exc):
-            raise UserAlreadyExistsError from exc
+            raise UserAlreadyExistsError("Username or email already registered") from exc
         raise
 
     await session.refresh(user)
@@ -63,7 +60,7 @@ async def authenticate_user(
     session: AsyncSession,
     identifier: str,
     password: str,
-) -> User | None:
+) -> User:
     identifier = identifier.strip()
 
     if "@" in identifier:
@@ -72,11 +69,10 @@ async def authenticate_user(
         user = await get_user_by_username(session, identifier.lower())
 
     if user is None:
-        return None
+        raise UnauthorizedError("Invalid username or password")
 
     valid_password = await verify_password(password, user.hashed_password)
 
     if not valid_password or not user.is_active:
-        return None
-
+        raise UnauthorizedError("Invalid username or password")
     return user
