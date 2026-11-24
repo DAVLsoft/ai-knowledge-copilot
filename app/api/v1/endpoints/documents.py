@@ -1,15 +1,11 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, UploadFile, status
 
 from app.api.deps import CurrentUser, SessionDep
 from app.schemas.document import DocumentRead
 from app.services.document import (
-    DocumentNotFoundError,
-    FileTooLargeError,
-    UnsupportedFileTypeError,
-    WorkspaceNotFoundError,
     create_document,
     get_documents,
 )
@@ -31,30 +27,12 @@ async def upload_document(
     current_user: CurrentUser,
     file: Annotated[UploadFile, File()],
 ):
-    try:
-        document = await create_document(
-            session=session,
-            workspace_id=workspace_id,
-            user_id=current_user.id,
-            file=file,
-        )
-    except WorkspaceNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Workspace not found",
-        ) from None
-    except UnsupportedFileTypeError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file format. Allowed formats: PDF, TXT, DOCX",
-        ) from None
-    except FileTooLargeError:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds the maximum allowed size of 10 MB",
-        ) from None
-
-    return document
+    return await create_document(
+        session=session,
+        workspace_id=workspace_id,
+        user_id=current_user.id,
+        file=file,
+    )
 
 
 @router.get(
@@ -67,19 +45,11 @@ async def list_documents(
     session: SessionDep,
     current_user: CurrentUser,
 ):
-    try:
-        documents = await get_documents(
-            session=session,
-            workspace_id=workspace_id,
-            user_id=current_user.id,
-        )
-    except WorkspaceNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Workspace not found",
-        ) from None
-
-    return documents
+    return await get_documents(
+        session=session,
+        workspace_id=workspace_id,
+        user_id=current_user.id,
+    )
 
 
 @router.delete(
@@ -91,14 +61,8 @@ async def delete_document(
     session: SessionDep,
     current_user: CurrentUser,
 ):
-    try:
-        await delete_document_service(
-            session=session,
-            document_id=document_id,
-            user_id=current_user.id,
-        )
-    except DocumentNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found",
-        ) from None
+    await delete_document_service(
+        session=session,
+        document_id=document_id,
+        user_id=current_user.id,
+    )

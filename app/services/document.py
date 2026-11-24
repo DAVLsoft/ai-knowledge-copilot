@@ -5,6 +5,12 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import (
+    DocumentNotFoundError,
+    FileTooLargeError,
+    UnsupportedFileTypeError,
+    WorkspaceNotFoundError,
+)
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
 from app.services.ingestion import trigger_ingestion
@@ -15,22 +21,6 @@ from app.storage.local import (
     delete_file,
     save_file,
 )
-
-
-class WorkspaceNotFoundError(Exception):
-    pass
-
-
-class UnsupportedFileTypeError(Exception):
-    pass
-
-
-class DocumentNotFoundError(Exception):
-    pass
-
-
-class FileTooLargeError(Exception):
-    pass
 
 
 async def create_document(
@@ -50,12 +40,13 @@ async def create_document(
         file_extension = Path(file.filename or "").suffix.lower()
 
         if file_extension not in allowed_extensions:
-            raise UnsupportedFileTypeError()
-
+            raise UnsupportedFileTypeError(
+                "Unsupported file format. Allowed formats: PDF, TXT, DOCX"
+            )
         try:
             file_path = await save_file(file)
         except StorageFileTooLargeError:
-            raise FileTooLargeError() from None
+            raise FileTooLargeError("File size exceeds the maximum allowed size of 10 MB") from None
 
         document = Document(
             workspace_id=workspace.id,
@@ -95,7 +86,7 @@ async def get_workspace(
     workspace = result.scalar_one_or_none()
 
     if workspace is None:
-        raise WorkspaceNotFoundError()
+        raise WorkspaceNotFoundError("Workspace not found")
 
     return workspace
 
@@ -132,7 +123,7 @@ async def delete_document(
     document = result.scalar_one_or_none()
 
     if document is None:
-        raise DocumentNotFoundError()
+        raise DocumentNotFoundError("Document not found")
 
     file_path = Path(document.file_path)
 

@@ -38,3 +38,19 @@ class UserAlreadyExistsError(ConflictError):
 
 class ServiceUnavailableError(AppError):
     pass
+
+
+class WorkspaceNotFoundError(NotFoundError):
+    pass
+
+
+class DocumentNotFoundError(NotFoundError):
+    pass
+
+
+class UnsupportedFileTypeError(BadRequestError):
+    pass
+
+
+class FileTooLargeError(AppError):
+    pass

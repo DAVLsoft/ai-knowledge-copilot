@@ -12,6 +12,7 @@ from app.core.errors import (
     AppError,
     BadRequestError,
     ConflictError,
+    FileTooLargeError,
     ForbiddenError,
     NotFoundError,
     ServiceUnavailableError,
@@ -27,6 +28,7 @@ DOMAIN_STATUSES: dict[type[AppError], HTTPStatus] = {
     NotFoundError: HTTPStatus.NOT_FOUND,
     ConflictError: HTTPStatus.CONFLICT,
     ServiceUnavailableError: HTTPStatus.SERVICE_UNAVAILABLE,
+    FileTooLargeError: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
 }
 
 
