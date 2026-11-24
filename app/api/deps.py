@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
@@ -10,7 +11,7 @@ from app.core.errors import UnauthorizedError
 from app.core.security import decode_access_token
 from app.db.session import get_session
 from app.models.user import User
-from app.services.rag import RAGService, UnconfiguredRAGService
+from app.services.ai import AIService, StubAIService
 from app.services.storage import LocalStorage, StorageBackend
 from app.services.user import get_user
 
@@ -21,12 +22,13 @@ def get_storage() -> StorageBackend:
     return LocalStorage(settings.upload_dir)
 
 
-def get_rag_service() -> RAGService:
-    return UnconfiguredRAGService()
+@lru_cache
+def get_ai_service() -> AIService:
+    return StubAIService()
 
 
 StorageDep = Annotated[StorageBackend, Depends(get_storage)]
-RAGDep = Annotated[RAGService, Depends(get_rag_service)]
+AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

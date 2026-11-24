@@ -13,9 +13,10 @@ if not (Path(__file__).resolve().parents[1] / ".env").exists():
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_rag_service, get_storage
+from app.api.deps import get_ai_service, get_storage
 from app.main import app
-from tests.fakes import FakeRAGService, FakeStorage
+from app.services.ai import StubAIService
+from tests.fakes import FakeStorage
 
 _SESSION_START = time.time()
 
@@ -49,22 +50,23 @@ def fake_storage() -> FakeStorage:
 
 
 @pytest.fixture
-def fake_rag() -> FakeRAGService:
-    return FakeRAGService()
+def fake_ai() -> StubAIService:
+    """Fresh deterministic AI service per test (empty index, no injected failure)."""
+    return StubAIService()
 
 
 @pytest.fixture(autouse=True)
 def _override_external_services(
-    fake_storage: FakeStorage, fake_rag: FakeRAGService
+    fake_storage: FakeStorage, fake_ai: StubAIService
 ) -> Iterator[None]:
     """Every test gets fakes by default, so nothing can reach real storage or the AI service."""
     app.dependency_overrides[get_storage] = lambda: fake_storage
-    app.dependency_overrides[get_rag_service] = lambda: fake_rag
+    app.dependency_overrides[get_ai_service] = lambda: fake_ai
     try:
         yield
     finally:
         app.dependency_overrides.pop(get_storage, None)
-        app.dependency_overrides.pop(get_rag_service, None)
+        app.dependency_overrides.pop(get_ai_service, None)
 
 
 @pytest.fixture

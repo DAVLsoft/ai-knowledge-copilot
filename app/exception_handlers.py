@@ -10,12 +10,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.errors import (
     AppError,
+    BadGatewayError,
     BadRequestError,
     ConflictError,
     ForbiddenError,
+    GatewayTimeoutError,
     NotFoundError,
     ServiceUnavailableError,
     UnauthorizedError,
+    UnprocessableEntityError,
 )
 from app.schemas.error import ErrorResponse, ValidationIssue
 
@@ -26,7 +29,10 @@ DOMAIN_STATUSES: dict[type[AppError], HTTPStatus] = {
     ForbiddenError: HTTPStatus.FORBIDDEN,
     NotFoundError: HTTPStatus.NOT_FOUND,
     ConflictError: HTTPStatus.CONFLICT,
+    UnprocessableEntityError: HTTPStatus.UNPROCESSABLE_ENTITY,
+    BadGatewayError: HTTPStatus.BAD_GATEWAY,
     ServiceUnavailableError: HTTPStatus.SERVICE_UNAVAILABLE,
+    GatewayTimeoutError: HTTPStatus.GATEWAY_TIMEOUT,
 }
 
 
@@ -41,8 +47,9 @@ def error_response(
 async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
     if isinstance(exc, UnauthorizedError):
         return error_response(exc.status_code, ErrorResponse(detail=exc.detail), exc.headers)
-    for error_type, status in DOMAIN_STATUSES.items():
-        if isinstance(exc, error_type):
+    for error_type in type(exc).__mro__:
+        status = DOMAIN_STATUSES.get(error_type)
+        if status is not None:
             return error_response(status, ErrorResponse(detail=str(exc) or status.phrase))
     return await handle_unexpected_error(request, exc)
 

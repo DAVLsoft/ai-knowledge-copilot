@@ -15,7 +15,8 @@ This README explains how the project is organised and how to work with it day to
 7. [Database and migrations](#database-and-migrations)
 8. [Code quality: ruff, mypy, pre-commit](#code-quality)
 9. [Tests](#tests)
-10. [CI (GitHub Actions)](#ci-github-actions)
+10. [AI/RAG service](#airag-service)
+11. [CI (GitHub Actions)](#ci-github-actions)
 11. [Docker setup explained](#docker-setup-explained)
 13. [How to add a new feature](#how-to-add-a-new-feature)
 14. [Troubleshooting](#troubleshooting)
@@ -291,12 +292,12 @@ Layout:
 |------|------|-------|
 | `tests/unit/` | pure logic, routes with stubbed dependencies | nothing (a route asking for a DB session fails loudly) |
 | `tests/integration/` | real HTTP stack + real PostgreSQL | running PostgreSQL |
-| `tests/fakes/` | in-memory `FakeStorage`, `FakeRAGService` | - |
+| `tests/fakes/` | in-memory `FakeStorage` (the AI service uses the deterministic `StubAIService`) | - |
 
 - Markers `unit` / `integration` are applied automatically by folder: `pytest -m unit --no-cov`, `pytest tests/integration`.
 - Integration tests create a throw-away database `<POSTGRES_DB>_test`, build the schema with the real Alembic migrations and drop it afterwards. Each test runs in a transaction that is rolled back, so tests never see each other's data. The dev database is never touched.
 - Safety: the test DB is only created on local hosts (`localhost`, `127.0.0.1`, `db`, `postgres`) and never with `ENVIRONMENT=production`. For a remote server you must opt in with `ALLOW_REMOTE_TEST_DB=1`.
-- Storage and the AI/RAG service are replaced by fakes in every test automatically (`tests/conftest.py`), so no test can reach real files or an LLM.
+- Storage and the AI/RAG service are replaced in every test automatically (`tests/conftest.py`): the `fake_storage` and `fake_ai` fixtures give each test a fresh `FakeStorage` and `StubAIService`, so no test can reach real files or an LLM. To test error paths set `fake_ai.failure = LLMTimeoutError()`.
 
 ### Coverage
 
@@ -317,6 +318,37 @@ uv run pytest -k login --no-cov
 
 - `PostgreSQL is not reachable ...` -> `docker compose up -d db` and check `POSTGRES_*` in `.env`. Without a database run `uv run pytest tests/unit --no-cov`.
 - `Refusing to create/drop a test database on remote host` -> your `.env` points to a non-local server; see Safety above.
+
+---
+
+## AI/RAG service
+
+Package [`app/services/ai/`](app/services/ai/). Routes depend on the `AIService` protocol through `AIServiceDep` (`app/api/deps.py`) and never on a concrete implementation.
+
+| Module | Content |
+|--------|---------|
+| `interface.py` | `AIService` protocol: `ingest_document(document_id, workspace_id, file_path, filename) -> IngestionResult` and `ask_workspace(workspace_id, query, chat_history) -> WorkspaceAnswer` |
+| `schemas.py` | Pydantic models: `ChatMessage`, `SourceCitation` (`document_id`, `filename`, `chunk_index`, `page_number`, `snippet`, `score`), `IngestionResult`, `WorkspaceAnswer` |
+| `exceptions.py` | `DocumentParsingError` (422), `EmbeddingServiceError` (502), `LLMGenerationError` (502), `LLMTimeoutError` (504); all inherit from `AIServiceError` |
+| `stub.py` | `StubAIService`: deterministic, in-memory, no network. This is the implementation that runs now |
+
+The errors are handled by the global exception handler, so routes need no `try/except`:
+
+```python
+@router.post("/workspaces/{workspace_id}/chat", response_model=WorkspaceAnswer)
+async def chat(workspace_id: UUID, body: ChatRequest, ai: AIServiceDep) -> WorkspaceAnswer:
+    return await ai.ask_workspace(
+        workspace_id=workspace_id, query=body.query, chat_history=body.chat_history
+    )
+```
+
+How the stub behaves:
+
+- `ingest_document` accepts `.txt`, `.md` (UTF-8) and `.pdf`. It reads the file at `file_path` and splits it into word-boundary chunks of about 800 characters. A PDF is only checked for the `%PDF-` header and indexed as one placeholder chunk on page 1. A missing, empty, undecodable or unsupported file raises `DocumentParsingError`. Re-ingesting the same `document_id` replaces its chunks.
+- `ask_workspace` ranks the chunks of that workspace only, by word overlap with the query, and returns up to 3 `SourceCitation`s plus a deterministic summary answer. The same input always gives the same output.
+- The index lives in process memory: it is lost on restart and is not shared between workers.
+
+When the real implementation is ready, make `get_ai_service()` in `app/api/deps.py` return it. Routes and tests stay unchanged.
 
 ---
 
