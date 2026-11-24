@@ -1,15 +1,13 @@
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_rag_service
 from app.core.security import create_access_token
-from app.main import app
 from app.models.workspace import Workspace
-from app.services.rag import UnconfiguredRAGService
-from tests.fakes import FakeRAGService
+from app.services.ai import LLMTimeoutError, StubAIService
 from tests.integration.factories import create_user
 
 
@@ -60,7 +58,7 @@ async def test_create_workspace_rejects_invalid_body(
 
 
 async def test_chat_switches_between_owned_workspaces_and_rejects_foreign_workspace(
-    client: AsyncClient, db_session: AsyncSession, fake_rag: FakeRAGService
+    client: AsyncClient, db_session: AsyncSession, fake_ai: StubAIService, tmp_path: Path
 ) -> None:
     owner = await create_user(db_session)
     other = await create_user(db_session, email="other@example.com", username="other")
@@ -71,19 +69,35 @@ async def test_chat_switches_between_owned_workspaces_and_rejects_foreign_worksp
     await db_session.commit()
     headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
     source_id = uuid4()
-    await fake_rag.index_document(source_id, "Example document")
+    source = tmp_path / "guide.txt"
+    source_text = "The guide is on the intranet."
+    source.write_text(source_text, encoding="utf-8")
+    await fake_ai.ingest_document(
+        document_id=source_id, workspace_id=first.id, file_path=source, filename=source.name
+    )
 
-    for workspace in (first, second):
-        response = await client.post(
-            f"/api/v1/workspaces/{workspace.id}/chat",
-            headers=headers,
-            json={"question": "  Where is the guide?  "},
-        )
-        assert response.status_code == 200
-        assert response.json() == {
-            "answer": fake_rag.canned_answer,
-            "source_document_ids": [str(source_id)],
+    first_response = await client.post(
+        f"/api/v1/workspaces/{first.id}/chat", headers=headers, json={"question": "  guide  "}
+    )
+    assert first_response.status_code == 200
+    first_body = first_response.json()
+    assert source.name in first_body["answer"]
+    assert first_body["citations"] == [
+        {
+            "document_id": str(source_id),
+            "filename": source.name,
+            "chunk_index": 0,
+            "page_number": None,
+            "snippet": source_text,
+            "score": 1.0,
         }
+    ]
+
+    second_response = await client.post(
+        f"/api/v1/workspaces/{second.id}/chat", headers=headers, json={"question": "guide"}
+    )
+    assert second_response.status_code == 200
+    assert second_response.json()["citations"] == []
 
     for workspace_id in (foreign.id, uuid4()):
         response = await client.post(
@@ -92,14 +106,11 @@ async def test_chat_switches_between_owned_workspaces_and_rejects_foreign_worksp
         assert response.status_code == 404
         assert response.json() == {"detail": "Workspace not found"}
 
-    assert fake_rag.questions == [
-        (first.id, "Where is the guide?"),
-        (second.id, "Where is the guide?"),
-    ]
+    assert fake_ai.queries == [(first.id, "guide"), (second.id, "guide")]
 
 
 async def test_chat_rejects_unauthenticated_and_invalid_requests(
-    client: AsyncClient, db_session: AsyncSession, fake_rag: FakeRAGService
+    client: AsyncClient, db_session: AsyncSession, fake_ai: StubAIService
 ) -> None:
     owner = await create_user(db_session)
     headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
@@ -108,22 +119,22 @@ async def test_chat_rejects_unauthenticated_and_invalid_requests(
     assert unauthenticated.status_code == 401
     invalid = await client.post(path, headers=headers, json={"question": "   "})
     assert invalid.status_code == 422
-    assert fake_rag.questions == []
+    assert fake_ai.queries == []
 
 
-async def test_owned_workspace_chat_returns_503_without_a_configured_rag(
-    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+async def test_owned_workspace_chat_returns_504_when_ai_times_out(
+    client: AsyncClient, db_session: AsyncSession, fake_ai: StubAIService
 ) -> None:
     owner = await create_user(db_session)
     workspace = Workspace(name="Engineering", owner_id=owner.id)
     db_session.add(workspace)
     await db_session.commit()
-    monkeypatch.setitem(app.dependency_overrides, get_rag_service, UnconfiguredRAGService)
+    fake_ai.failure = LLMTimeoutError()
 
     response = await client.post(
         f"/api/v1/workspaces/{workspace.id}/chat",
         headers={"Authorization": f"Bearer {create_access_token(owner.id)}"},
         json={"question": "Guide?"},
     )
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Chat service is unavailable"}
+    assert response.status_code == 504
+    assert response.json() == {"detail": "The AI model did not respond in time"}

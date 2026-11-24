@@ -23,8 +23,3 @@ class WorkspaceRead(BaseModel):
 
 class ChatRequest(BaseModel):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    source_document_ids: list[UUID]
