@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
@@ -16,13 +16,31 @@ jobs:
   quality:
     name: Lint, type-check, test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       UV_LOCKED: "1"
-      # Dummy values: settings are required at import time, tests don't hit the DB.
+      # Integration tests create and drop their own `ci_test` database on this server.
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
       POSTGRES_USER: ci
       POSTGRES_PASSWORD: ci
       POSTGRES_DB: ci
+      # Public test-only key; never use it in a deployed environment.
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-at-least-32-bytes
     steps:
       - uses: actions/checkout@v7
 
@@ -44,5 +62,33 @@ jobs:
       - name: Mypy
         run: uv run mypy
 
-      - name: Pytest
+      - name: Pytest (with coverage)
         run: uv run pytest
+
+      - name: Upload HTML coverage report
+        id: upload-coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          if-no-files-found: ignore
+
+      - name: Coverage summary
+        if: always()
+        env:
+          REPORT_URL: ${{ steps.upload-coverage.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Test coverage"
+            echo
+            if [ -f .coverage ]; then
+              uv run coverage report --format=markdown --skip-covered --fail-under=0
+            else
+              echo "_No coverage data (tests did not run)._"
+            fi
+            echo
+            if [ -n "$REPORT_URL" ]; then
+              echo "📊 [Open HTML coverage report (download artifact, open index.html)]($REPORT_URL)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

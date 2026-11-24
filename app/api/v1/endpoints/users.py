@@ -1,22 +1,20 @@
 from collections.abc import Sequence
+from http import HTTPStatus
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Query
 
 from app.api.deps import SessionDep
+from app.core.errors import NotFoundError
+from app.exception_handlers import documented_errors
 from app.models.user import User
-from app.schemas.user import UserCreate, UserRead
+from app.schemas.user import UserRead
 from app.services import user as user_service
 
-router = APIRouter(prefix="/users", tags=["users"])
-
-
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=UserRead)
-async def create_user(data: UserCreate, session: SessionDep) -> User:
-    try:
-        return await user_service.create_user(session, data)
-    except user_service.UserAlreadyExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, "User already exists") from exc
+router = APIRouter(
+    prefix="/users", tags=["users"], responses=documented_errors(HTTPStatus.UNPROCESSABLE_ENTITY)
+)
 
 
 @router.get("", response_model=list[UserRead])
@@ -28,9 +26,11 @@ async def list_users(
     return await user_service.list_users(session, offset=offset, limit=limit)
 
 
-@router.get("/{user_id}", response_model=UserRead)
-async def get_user(user_id: int, session: SessionDep) -> User:
+@router.get(
+    "/{user_id}", response_model=UserRead, responses=documented_errors(HTTPStatus.NOT_FOUND)
+)
+async def get_user(user_id: UUID, session: SessionDep) -> User:
     user = await user_service.get_user(session, user_id)
     if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        raise NotFoundError("User not found")
     return user

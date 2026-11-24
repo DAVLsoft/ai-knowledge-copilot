@@ -7,9 +7,12 @@ dependencies = [
     "aiofiles>=25.1.0",
     "alembic>=1.20.1",
     "asyncpg>=0.32.0",
+    "bcrypt>=5.0.0",
     "fastapi>=0.163.1",
     "pydantic-settings>=2.16.3",
     "pydantic[email]>=2.14.3",
+    "pyjwt>=2.15.1",
+    "python-multipart>=0.0.34",
     "sqlalchemy[asyncio]>=2.1.8",
     "tzdata>=2026.6",
     "uvicorn[standard]>=0.54.0",
@@ -22,6 +25,7 @@ dev = [
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.17.5",
 ]
 
@@ -83,4 +87,20 @@ warn_required_dynamic_aliases = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
-addopts = "-ra --strict-markers"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "unit: no DB or network (auto-applied to tests/unit)",
+    "integration: needs PostgreSQL (auto-applied to tests/integration)",
+]
+addopts = "-ra --strict-markers --cov --cov-report=term-missing --cov-report=html --cov-report=xml"
+
+# ---------------------------------------------------------------- coverage
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\.$"]
