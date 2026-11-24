@@ -36,7 +36,19 @@ class UserAlreadyExistsError(ConflictError):
     pass
 
 
+class UnprocessableEntityError(AppError):
+    pass
+
+
+class BadGatewayError(AppError):
+    pass
+
+
 class ServiceUnavailableError(AppError):
+    pass
+
+
+class GatewayTimeoutError(AppError):
     pass
 
 
