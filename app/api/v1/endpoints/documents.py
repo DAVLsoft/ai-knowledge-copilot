@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, UploadFile, status
 
 from app.api.deps import CurrentUser, SessionDep
+from app.models import Document
 from app.schemas.document import DocumentRead
 from app.services.document import (
     create_document,
@@ -26,7 +27,7 @@ async def upload_document(
     session: SessionDep,
     current_user: CurrentUser,
     file: Annotated[UploadFile, File()],
-):
+) -> Document:
     return await create_document(
         session=session,
         workspace_id=workspace_id,
@@ -44,7 +45,7 @@ async def list_documents(
     workspace_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
-):
+) -> list[Document]:
     return await get_documents(
         session=session,
         workspace_id=workspace_id,
@@ -60,7 +61,7 @@ async def delete_document(
     document_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
-):
+) -> None:
     await delete_document_service(
         session=session,
         document_id=document_id,

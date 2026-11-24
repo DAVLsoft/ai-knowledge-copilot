@@ -2,9 +2,11 @@ import asyncio
 import uuid
 from io import BytesIO
 from pathlib import Path
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import UploadFile
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +18,7 @@ from tests.integration.factories import PASSWORD, create_user, create_workspace
 async def test_upload_document(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -69,7 +71,7 @@ async def test_upload_document(
 async def test_upload_document_ingestion_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -110,7 +112,7 @@ async def test_upload_document_ingestion_error(
 async def test_upload_document_refresh_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     rollback_mock = AsyncMock(wraps=db_session.rollback)
@@ -192,7 +194,7 @@ async def test_upload_document_workspace_not_found(
 async def test_upload_document_file_too_large(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -225,7 +227,7 @@ async def test_upload_document_file_too_large(
 async def test_list_documents(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -268,7 +270,7 @@ async def test_list_documents(
 async def test_list_documents_database_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
@@ -279,7 +281,7 @@ async def test_list_documents_database_error(
     )
     access_token = login.json()["access_token"]
 
-    async def failing_execute(*args, **kwargs):
+    async def failing_execute(*args: Any, **kwargs: Any) -> NoReturn:
         raise RuntimeError("Database query failed")
 
     monkeypatch.setattr(db_session, "execute", failing_execute)
@@ -294,7 +296,7 @@ async def test_list_documents_database_error(
 async def test_delete_document(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -367,7 +369,7 @@ async def test_delete_document_from_another_users_workspace(
     client: AsyncClient,
     db_session: AsyncSession,
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
 
@@ -412,7 +414,7 @@ async def test_delete_document_from_another_users_workspace(
 async def test_upload_document_commit_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     rollback_mock = AsyncMock(wraps=db_session.rollback)
@@ -428,7 +430,7 @@ async def test_upload_document_commit_error(
     )
     access_token = login.json()["access_token"]
 
-    async def failing_commit():
+    async def failing_commit() -> NoReturn:
         raise RuntimeError("Database commit failed")
 
     monkeypatch.setattr(db_session, "commit", failing_commit)
@@ -448,7 +450,7 @@ async def test_upload_document_commit_error(
 async def test_delete_document_commit_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -480,7 +482,7 @@ async def test_delete_document_commit_error(
     rollback_mock = AsyncMock(wraps=db_session.rollback)
     monkeypatch.setattr(db_session, "rollback", rollback_mock)
 
-    async def failing_commit():
+    async def failing_commit() -> NoReturn:
         raise RuntimeError("Database commit failed")
 
     monkeypatch.setattr(db_session, "commit", failing_commit)
@@ -498,7 +500,7 @@ async def test_delete_document_commit_error(
 async def test_upload_document_storage_error(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
@@ -512,7 +514,7 @@ async def test_upload_document_storage_error(
     )
     access_token = login.json()["access_token"]
 
-    async def failing_save_file(file):
+    async def failing_save_file(file: UploadFile) -> NoReturn:
         raise OSError("Disk write failed")
 
     monkeypatch.setattr(
@@ -611,7 +613,7 @@ async def test_upload_document_to_another_users_workspace(
 async def test_delete_document_when_file_missing(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     user = await create_user(db_session)
