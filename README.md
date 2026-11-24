@@ -345,7 +345,7 @@ async def chat(workspace_id: UUID, body: ChatRequest, ai: AIServiceDep) -> Works
 How the stub behaves:
 
 - `ingest_document` accepts `.txt`, `.md` (UTF-8) and `.pdf`. It reads the file at `file_path` and splits it into word-boundary chunks of about 800 characters. A PDF is only checked for the `%PDF-` header and indexed as one placeholder chunk on page 1. A missing, empty, undecodable or unsupported file raises `DocumentParsingError`. Re-ingesting the same `document_id` replaces its chunks.
-- `ask_workspace` ranks the chunks of that workspace only, by word overlap with the query, and returns up to 3 `SourceCitation`s plus an answer starting with `[stub]`. The same input always gives the same output.
+- `ask_workspace` ranks the chunks of that workspace only, by word overlap with the query, and returns up to 3 `SourceCitation`s plus a deterministic summary answer. The same input always gives the same output.
 - The index lives in process memory: it is lost on restart and is not shared between workers.
 
 When the real implementation is ready, make `get_ai_service()` in `app/api/deps.py` return it. Routes and tests stay unchanged.

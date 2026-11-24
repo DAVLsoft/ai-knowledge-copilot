@@ -107,7 +107,7 @@ async def test_workspaces_are_isolated(tmp_path: Path) -> None:
     answer = await ai.ask_workspace(workspace_id=WS, query="roadmap")
 
     assert answer.citations == []
-    assert answer.answer.startswith("[stub] No relevant information")
+    assert answer.answer.startswith("No relevant information")
 
 
 async def test_reingest_replaces_previous_chunks(tmp_path: Path) -> None:
