@@ -120,6 +120,7 @@ async def test_upload_document_ingestion_error(
 
     result = await db_session.execute(select(Document).where(Document.workspace_id == workspace.id))
     document = result.scalar_one()
+    assert document.status == DocumentStatus.FAILED
 
     file_path = Path(document.file_path)
 
