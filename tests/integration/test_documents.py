@@ -68,7 +68,7 @@ async def test_upload_document(
     assert content == b"Test document"
     assert body["workspace_id"] == str(workspace.id)
     assert body["filename"] == "report.txt"
-    assert body["status"] == DocumentStatus.PENDING.value
+    assert body["status"] == DocumentStatus.PROCESSED.value
     assert "id" in body
     assert "created_at" in body
     assert "updated_at" in body
@@ -190,7 +190,9 @@ async def test_upload_document_unsupported_format(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == ("Unsupported file format. Allowed formats: PDF, TXT, DOCX")
+    assert response.json()["detail"] == (
+        "Unsupported file format. Allowed formats: DOCX, MD, PDF, TXT"
+    )
 
 
 async def test_upload_document_workspace_not_found(
@@ -285,7 +287,7 @@ async def test_list_documents(
     assert len(body) == 1
     assert body[0]["filename"] == "report.txt"
     assert body[0]["workspace_id"] == str(workspace.id)
-    assert body[0]["status"] == DocumentStatus.PENDING.value
+    assert body[0]["status"] == DocumentStatus.PROCESSED.value
     assert "file_path" not in body[0]
 
 

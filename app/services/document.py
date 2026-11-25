@@ -1,3 +1,4 @@
+import logging
 import uuid
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from app.core.errors import (
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
 from app.services.ai import AIService
+from app.services.ai.stub import SUPPORTED_EXTENSIONS
 from app.storage.local import (
     FileTooLargeError as StorageFileTooLargeError,
 )
@@ -21,6 +23,8 @@ from app.storage.local import (
     delete_file,
     save_file,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def create_document(
@@ -37,13 +41,17 @@ async def create_document(
             user_id=user_id,
         )
 
-        allowed_extensions = {".pdf", ".txt", ".docx"}
         file_extension = Path(file.filename or "").suffix.lower()
 
-        if file_extension not in allowed_extensions:
+        allowed_formats = ", ".join(
+            extension.lstrip(".").upper() for extension in sorted(SUPPORTED_EXTENSIONS)
+        )
+
+        if file_extension not in SUPPORTED_EXTENSIONS:
             raise UnsupportedFileTypeError(
-                "Unsupported file format. Allowed formats: PDF, TXT, DOCX"
+                f"Unsupported file format. Allowed formats: {allowed_formats}"
             )
+
         try:
             file_path = await save_file(file)
         except StorageFileTooLargeError:
@@ -64,12 +72,32 @@ async def create_document(
             await session.rollback()
             delete_file(file_path)
             raise
-        await ai_service.ingest_document(
-            document_id=document.id,
-            workspace_id=document.workspace_id,
-            file_path=document.file_path,
-            filename=document.filename,
-        )
+
+        try:
+            await ai_service.ingest_document(
+                document_id=document.id,
+                workspace_id=document.workspace_id,
+                file_path=document.file_path,
+                filename=document.filename,
+            )
+        except Exception:
+            document.status = DocumentStatus.FAILED
+
+            try:
+                await session.commit()
+                await session.refresh(document)
+            except Exception:
+                await session.rollback()
+                logger.exception(
+                    "Failed to update document %s status to FAILED",
+                    document.id,
+                )
+
+            raise
+        else:
+            document.status = DocumentStatus.PROCESSED
+            await session.commit()
+            await session.refresh(document)
 
         return document
 

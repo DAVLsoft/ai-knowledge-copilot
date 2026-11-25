@@ -2,14 +2,17 @@ import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from uuid import UUID
+
+from docx import Document as DocxDocument
 
 from app.core.errors import BadRequestError
 from app.services.ai.exceptions import AIServiceError, DocumentParsingError
 from app.services.ai.schemas import ChatMessage, IngestionResult, SourceCitation, WorkspaceAnswer
 
-SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".pdf"})
+SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".pdf", ".docx"})
 _WORD = re.compile(r"\w+")
 
 
@@ -135,6 +138,24 @@ class StubAIService:
         )
 
     @staticmethod
+    def _extract_docx_text(data: bytes) -> str:
+        try:
+            document = DocxDocument(BytesIO(data))
+        except Exception as exc:
+            raise DocumentParsingError("Document is not a valid DOCX file") from exc
+
+        paragraphs = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+
+        table_rows = [
+            " ".join(cell.text for cell in row.cells)
+            for table in document.tables
+            for row in table.rows
+            if any(cell.text.strip() for cell in row.cells)
+        ]
+
+        return "\n".join([*paragraphs, *table_rows])
+
+    @staticmethod
     async def _extract_text(path: Path, filename: str) -> tuple[str, int | None]:
         suffix = Path(filename).suffix.lower()
         if suffix not in SUPPORTED_EXTENSIONS:
@@ -151,6 +172,8 @@ class StubAIService:
                 raise DocumentParsingError("File is not a valid PDF")
             # The stub does not parse PDFs; index a deterministic placeholder on page 1.
             return f"Stub text for {filename}. PDF content is not extracted by the stub.", 1
+        if suffix == ".docx":
+            return await asyncio.to_thread(StubAIService._extract_docx_text, data), None
         try:
             return data.decode("utf-8-sig"), None
         except UnicodeDecodeError as exc:
