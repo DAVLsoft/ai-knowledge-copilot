@@ -1,8 +1,9 @@
 import asyncio
+from collections.abc import Callable
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +12,10 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_ai_service
+from app.main import app
 from app.models.document import Document, DocumentStatus
+from app.services.ai import AIService
 from tests.integration.factories import PASSWORD, create_user, create_workspace
 
 
@@ -33,11 +37,16 @@ async def test_upload_document(
     access_token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    trigger_mock = AsyncMock()
-    monkeypatch.setattr(
-        "app.services.document.trigger_ingestion",
-        trigger_mock,
-    )
+    ai_service_mock = AsyncMock()
+
+    def override_ai_service() -> AIService:
+        return cast(AIService, ai_service_mock)
+
+    overrides: dict[Callable[..., Any], Callable[..., Any]] = {
+        **app.dependency_overrides,
+        get_ai_service: override_ai_service,
+    }
+    monkeypatch.setattr(app, "dependency_overrides", overrides)
 
     response = await client.post(
         f"/api/v1/workspaces/{workspace.id}/documents",
@@ -65,7 +74,12 @@ async def test_upload_document(
     assert "updated_at" in body
     assert "file_path" not in body
 
-    trigger_mock.assert_awaited_once_with(uuid.UUID(body["id"]))
+    ai_service_mock.ingest_document.assert_awaited_once_with(
+        document_id=uuid.UUID(body["id"]),
+        workspace_id=workspace.id,
+        file_path=document.file_path,
+        filename=document.filename,
+    )
 
 
 async def test_upload_document_ingestion_error(
@@ -85,11 +99,17 @@ async def test_upload_document_ingestion_error(
     )
     access_token = login.json()["access_token"]
 
-    trigger_mock = AsyncMock(side_effect=RuntimeError("Ingestion failed"))
-    monkeypatch.setattr(
-        "app.services.document.trigger_ingestion",
-        trigger_mock,
-    )
+    ai_service_mock = AsyncMock()
+    ai_service_mock.ingest_document.side_effect = RuntimeError("Ingestion failed")
+
+    def override_ai_service() -> AIService:
+        return cast(AIService, ai_service_mock)
+
+    overrides: dict[Callable[..., Any], Callable[..., Any]] = {
+        **app.dependency_overrides,
+        get_ai_service: override_ai_service,
+    }
+    monkeypatch.setattr(app, "dependency_overrides", overrides)
 
     with pytest.raises(RuntimeError, match="Ingestion failed"):
         await client.post(
@@ -106,7 +126,12 @@ async def test_upload_document_ingestion_error(
     assert await asyncio.to_thread(file_path.exists)
     content = await asyncio.to_thread(file_path.read_bytes)
     assert content == b"Test document"
-    trigger_mock.assert_awaited_once_with(document.id)
+    ai_service_mock.ingest_document.assert_awaited_once_with(
+        document_id=document.id,
+        workspace_id=workspace.id,
+        file_path=document.file_path,
+        filename=document.filename,
+    )
 
 
 async def test_upload_document_refresh_error(
@@ -242,9 +267,6 @@ async def test_list_documents(
     access_token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    trigger_mock = AsyncMock()
-    monkeypatch.setattr("app.services.document.trigger_ingestion", trigger_mock)
-
     upload_response = await client.post(
         f"/api/v1/workspaces/{workspace.id}/documents",
         headers=headers,
@@ -310,9 +332,6 @@ async def test_delete_document(
     )
     access_token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access_token}"}
-
-    trigger_mock = AsyncMock()
-    monkeypatch.setattr("app.services.document.trigger_ingestion", trigger_mock)
 
     upload_response = await client.post(
         f"/api/v1/workspaces/{workspace.id}/documents",
@@ -464,9 +483,6 @@ async def test_delete_document_commit_error(
     )
     access_token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access_token}"}
-
-    trigger_mock = AsyncMock()
-    monkeypatch.setattr("app.services.document.trigger_ingestion", trigger_mock)
 
     upload_response = await client.post(
         f"/api/v1/workspaces/{workspace.id}/documents",

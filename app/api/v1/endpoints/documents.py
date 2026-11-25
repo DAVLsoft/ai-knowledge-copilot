@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile, status
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import AIServiceDep, CurrentUser, SessionDep
 from app.models import Document
 from app.schemas.document import DocumentRead
 from app.services.document import (
@@ -26,6 +26,7 @@ async def upload_document(
     workspace_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
+    ai_service: AIServiceDep,
     file: Annotated[UploadFile, File()],
 ) -> Document:
     return await create_document(
@@ -33,6 +34,7 @@ async def upload_document(
         workspace_id=workspace_id,
         user_id=current_user.id,
         file=file,
+        ai_service=ai_service,
     )
 
 

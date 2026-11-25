@@ -13,7 +13,7 @@ from app.core.errors import (
 )
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
-from app.services.ingestion import trigger_ingestion
+from app.services.ai import AIService
 from app.storage.local import (
     FileTooLargeError as StorageFileTooLargeError,
 )
@@ -27,6 +27,7 @@ async def create_document(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
+    ai_service: AIService,
     file: UploadFile,
 ) -> Document:
     try:
@@ -63,7 +64,12 @@ async def create_document(
             await session.rollback()
             delete_file(file_path)
             raise
-        await trigger_ingestion(document.id)
+        await ai_service.ingest_document(
+            document_id=document.id,
+            workspace_id=document.workspace_id,
+            file_path=document.file_path,
+            filename=document.filename,
+        )
 
         return document
 
