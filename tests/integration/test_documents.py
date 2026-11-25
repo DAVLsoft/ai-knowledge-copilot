@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Callable
 import uuid
+from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
 from typing import Any, NoReturn, cast
