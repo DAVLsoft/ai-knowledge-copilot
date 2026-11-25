@@ -42,6 +42,7 @@ async def workspace_list(
         HTTPStatus.BAD_REQUEST,
         HTTPStatus.NOT_FOUND,
         HTTPStatus.BAD_GATEWAY,
+        HTTPStatus.SERVICE_UNAVAILABLE,
         HTTPStatus.GATEWAY_TIMEOUT,
     ),
 )
