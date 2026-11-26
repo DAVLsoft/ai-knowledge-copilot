@@ -1,4 +1,4 @@
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 
 class FakeStorage:
@@ -34,3 +34,6 @@ class FakeStorage:
 
     async def exists(self, key: str) -> bool:
         return self._validate_key(key) in self.files
+
+    def get_path(self, key: str) -> Path:
+        return Path(self._validate_key(key))
