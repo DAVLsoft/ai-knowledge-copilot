@@ -4,6 +4,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.models.chat_message import ChatMessageRole
+from app.services.ai import SourceCitation
+
 
 class WorkspaceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -23,3 +26,13 @@ class WorkspaceRead(BaseModel):
 
 class ChatRequest(BaseModel):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class WorkspaceChatMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: ChatMessageRole
+    content: str
+    sources: list[SourceCitation]
+    created_at: datetime
