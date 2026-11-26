@@ -14,6 +14,7 @@ from app.services.ai import (
     SourceCitation,
     StubAIService,
 )
+from tests.unit.document_builders import build_docx_bytes, build_pdf_bytes
 
 WS = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 OTHER_WS = uuid.UUID("00000000-0000-0000-0000-00000000000b")
@@ -46,8 +47,8 @@ def test_stub_satisfies_protocol() -> None:
     assert service is not None
 
 
-async def test_ingest_splits_text_into_word_boundary_chunks(tmp_path: Path) -> None:
-    ai = StubAIService(chunk_size=11)
+async def test_ingest_splits_text_into_token_bounded_chunks(tmp_path: Path) -> None:
+    ai = StubAIService(chunk_size=2, chunk_overlap=0)
     path = _write(tmp_path, "notes.txt", "alpha beta gamma delta epsilon")
     doc_id = uuid.uuid4()
 
@@ -57,6 +58,7 @@ async def test_ingest_splits_text_into_word_boundary_chunks(tmp_path: Path) -> N
 
     assert (result.document_id, result.workspace_id, result.chunk_count) == (doc_id, WS, 3)
     assert ai.indexed_documents(WS) == {doc_id}
+    assert len(ai.get_document_chunks(WS, doc_id)) == 3
 
 
 async def test_ask_returns_ranked_citations_from_ingested_documents(tmp_path: Path) -> None:
@@ -133,13 +135,19 @@ async def test_chat_history_is_acknowledged(tmp_path: Path) -> None:
     assert "Considered 2 previous message(s)." in answer.answer
 
 
-async def test_pdf_gets_placeholder_text_on_page_one(tmp_path: Path) -> None:
+async def test_pdf_and_docx_are_extracted_with_page_metadata(tmp_path: Path) -> None:
     ai = StubAIService()
-    await _ingest(ai, tmp_path, "report.pdf", b"%PDF-1.7\n...")
+    pdf_bytes = build_pdf_bytes(["Overview page", "Deployment runbook instructions"])
+    docx_bytes = build_docx_bytes(paragraphs=["Incident escalation handbook"])
+    await _ingest(ai, tmp_path, "guide.pdf", pdf_bytes)
+    await _ingest(ai, tmp_path, "ops.docx", docx_bytes)
 
-    answer = await ai.ask_workspace(workspace_id=WS, query="report.pdf")
+    pdf_answer = await ai.ask_workspace(workspace_id=WS, query="runbook")
+    docx_answer = await ai.ask_workspace(workspace_id=WS, query="escalation")
 
-    assert answer.citations[0].page_number == 1
+    assert pdf_answer.citations[0].page_number == 2
+    assert pdf_answer.citations[0].chunk_index == 1
+    assert docx_answer.citations[0].page_number is None
 
 
 @pytest.mark.parametrize(
@@ -147,9 +155,10 @@ async def test_pdf_gets_placeholder_text_on_page_one(tmp_path: Path) -> None:
     [
         ("image.png", b"\x89PNG", "Unsupported file type"),
         ("no_extension", b"data", "Unsupported file type"),
-        ("empty.txt", b"  \n ", "Document is empty"),
-        ("binary.txt", b"\xff\xfe\x00bad", "not valid UTF-8"),
+        ("empty.txt", b"  \n ", "no extractable text"),
+        ("binary.txt", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", "binary"),
         ("fake.pdf", b"not a pdf", "not a valid PDF"),
+        ("corrupt.pdf", b"%PDF-1.7\ncorrupted", "not a valid PDF"),
     ],
 )
 async def test_ingest_rejects_bad_documents(
@@ -169,11 +178,10 @@ async def test_ingest_missing_file(tmp_path: Path) -> None:
         )
 
 
-async def test_ingest_rejects_text_without_words(tmp_path: Path) -> None:
+async def test_ingest_rejects_punctuation_only_text(tmp_path: Path) -> None:
     ai = StubAIService()
-    # Non-empty bytes that decode to whitespace only (non-breaking spaces).
-    with pytest.raises(DocumentParsingError, match="no text"):
-        await _ingest(ai, tmp_path, "blank.txt", "\u00a0\u00a0")
+    with pytest.raises(DocumentParsingError, match="no searchable words"):
+        await _ingest(ai, tmp_path, "punct.txt", "--- !!! ???")
 
 
 async def test_ask_rejects_query_without_words() -> None:
