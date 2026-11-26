@@ -50,3 +50,19 @@ class ServiceUnavailableError(AppError):
 
 class GatewayTimeoutError(AppError):
     pass
+
+
+class WorkspaceNotFoundError(NotFoundError):
+    pass
+
+
+class DocumentNotFoundError(NotFoundError):
+    pass
+
+
+class UnsupportedFileTypeError(BadRequestError):
+    pass
+
+
+class FileTooLargeError(AppError):
+    pass

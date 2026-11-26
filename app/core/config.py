@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     postgres_password: SecretStr
     postgres_db: str
 
+    uploads_dir: Path = Path("uploads")
+
     @property
     def database_url(self) -> URL:
         return URL.create(

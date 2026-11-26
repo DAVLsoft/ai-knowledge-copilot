@@ -13,6 +13,7 @@ from app.core.errors import (
     BadGatewayError,
     BadRequestError,
     ConflictError,
+    FileTooLargeError,
     ForbiddenError,
     GatewayTimeoutError,
     NotFoundError,
@@ -33,6 +34,7 @@ DOMAIN_STATUSES: dict[type[AppError], HTTPStatus] = {
     BadGatewayError: HTTPStatus.BAD_GATEWAY,
     ServiceUnavailableError: HTTPStatus.SERVICE_UNAVAILABLE,
     GatewayTimeoutError: HTTPStatus.GATEWAY_TIMEOUT,
+    FileTooLargeError: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
 }
 
 
