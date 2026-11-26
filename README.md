@@ -328,9 +328,11 @@ Package [`app/services/ai/`](app/services/ai/). Routes depend on the `AIService`
 | Module | Content |
 |--------|---------|
 | `interface.py` | `AIService` protocol: `ingest_document(document_id, workspace_id, file_path, filename) -> IngestionResult` and `ask_workspace(workspace_id, query, chat_history) -> WorkspaceAnswer` |
-| `schemas.py` | Pydantic models: `ChatMessage`, `SourceCitation` (`document_id`, `filename`, `chunk_index`, `page_number`, `snippet`, `score`), `IngestionResult`, `WorkspaceAnswer` |
+| `schemas.py` | Pydantic models: `ChatMessage`, `DocumentChunk`, `SourceCitation` (`document_id`, `filename`, `chunk_index`, `page_number`, `snippet`, `score`), `IngestionResult`, `WorkspaceAnswer` |
+| `extractors.py` | Modular extractors for `.pdf`, `.docx`, `.txt`, and `.md` with encoding fallback, Unicode/whitespace normalization, and `DocumentParsingError` handling |
+| `chunker.py` | `RecursiveTextChunker(chunk_size, chunk_overlap)`: token-aware recursive splitter attaching provenance metadata to every `DocumentChunk` |
 | `exceptions.py` | `DocumentParsingError` (422), `EmbeddingServiceError` (502), `LLMGenerationError` (502), `LLMTimeoutError` (504); all inherit from `AIServiceError` |
-| `stub.py` | `StubAIService`: deterministic, in-memory, no network. This is the implementation that runs now |
+| `stub.py` | `StubAIService`: deterministic in-memory retrieval backed by the real extractors and chunker |
 
 The errors are handled by the global exception handler, so routes need no `try/except`:
 
@@ -344,7 +346,7 @@ async def chat(workspace_id: UUID, body: ChatRequest, ai: AIServiceDep) -> Works
 
 How the stub behaves:
 
-- `ingest_document` accepts `.txt`, `.md` (UTF-8) and `.pdf`. It reads the file at `file_path` and splits it into word-boundary chunks of about 800 characters. A PDF is only checked for the `%PDF-` header and indexed as one placeholder chunk on page 1. A missing, empty, undecodable or unsupported file raises `DocumentParsingError`. Re-ingesting the same `document_id` replaces its chunks.
+- `ingest_document` accepts `.txt`, `.md`, `.pdf`, and `.docx`. It extracts normalized text (with encoding fallback for text files and 1-based page numbers for PDFs) and splits it with `RecursiveTextChunker` (`chunk_size` + `chunk_overlap` in tokens). A missing, empty, password-protected, corrupted or unsupported file raises `DocumentParsingError`. Re-ingesting the same `document_id` replaces its chunks.
 - `ask_workspace` ranks the chunks of that workspace only, by word overlap with the query, and returns up to 3 `SourceCitation`s plus a deterministic summary answer. The same input always gives the same output.
 - The index lives in process memory: it is lost on restart and is not shared between workers.
 
