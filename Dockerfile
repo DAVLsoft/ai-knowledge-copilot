@@ -33,6 +33,7 @@ RUN groupadd --system --gid 1000 app \
 
 WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
+RUN mkdir -p /app/uploads && chown app:app /app/uploads
 
 USER app
 EXPOSE 8000

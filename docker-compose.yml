@@ -37,7 +37,7 @@ services:
     <<: *app
     restart: unless-stopped
     volumes:
-      - ./uploads:/app/uploads
+      - uploads:/app/uploads
     ports:
       - "8000:8000"
     depends_on:
@@ -48,3 +48,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:
