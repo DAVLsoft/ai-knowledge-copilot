@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile, status
 
-from app.api.deps import AIServiceDep, CurrentUser, SessionDep
+from app.api.deps import AIServiceDep, CurrentUser, SessionDep, StorageDep
 from app.models import Document
 from app.schemas.document import DocumentRead
 from app.services.document import (
@@ -27,6 +27,7 @@ async def upload_document(
     session: SessionDep,
     current_user: CurrentUser,
     ai_service: AIServiceDep,
+    storage: StorageDep,
     file: Annotated[UploadFile, File()],
 ) -> Document:
     return await create_document(
@@ -35,6 +36,7 @@ async def upload_document(
         user_id=current_user.id,
         file=file,
         ai_service=ai_service,
+        storage=storage,
     )
 
 
@@ -63,9 +65,11 @@ async def delete_document(
     document_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
+    storage: StorageDep,
 ) -> None:
     await delete_document_service(
         session=session,
         document_id=document_id,
         user_id=current_user.id,
+        storage=storage,
     )

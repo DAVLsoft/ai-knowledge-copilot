@@ -16,6 +16,8 @@ class StorageBackend(Protocol):
 
     async def exists(self, key: str) -> bool: ...
 
+    def get_path(self, key: str) -> Path: ...
+
 
 class LocalStorage:
     def __init__(self, root: Path) -> None:
@@ -26,6 +28,10 @@ class LocalStorage:
         if path == self._root or not path.is_relative_to(self._root):
             raise ValueError("Storage key escapes the storage root")
         return path
+
+    def get_path(self, key: str) -> Path:
+        """Return the absolute path corresponding to a storage key."""
+        return self._path(key)
 
     async def save(self, key: str, data: bytes) -> None:
         path = self._path(key)
