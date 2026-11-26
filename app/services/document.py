@@ -14,8 +14,7 @@ from app.core.errors import (
 )
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
-from app.services.ai import AIService
-from app.services.ai.stub import SUPPORTED_EXTENSIONS
+from app.services.ai import SUPPORTED_EXTENSIONS, AIService
 from app.storage.local import (
     FileTooLargeError as StorageFileTooLargeError,
 )
