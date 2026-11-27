@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from collections.abc import Callable
 from io import BytesIO
@@ -7,26 +6,40 @@ from typing import Any, NoReturn, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import UploadFile
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_ai_service
+from app.api.deps import get_ai_service, get_storage
 from app.main import app
 from app.models.document import Document, DocumentStatus
 from app.services.ai import AIService
+from app.services.storage import LocalStorage
 from tests.integration.factories import PASSWORD, create_user, create_workspace
+
+
+@pytest.fixture
+def storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> LocalStorage:
+    local_storage = LocalStorage(tmp_path)
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        get_storage,
+        lambda: local_storage,
+    )
+
+    return local_storage
 
 
 async def test_upload_document(
     client: AsyncClient,
     db_session: AsyncSession,
+    storage: LocalStorage,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
 
@@ -61,11 +74,14 @@ async def test_upload_document(
     result = await db_session.execute(select(Document).where(Document.id == uuid.UUID(body["id"])))
     document = result.scalar_one()
 
-    file_path = Path(document.file_path)
+    assert document.file_path.startswith("documents/")
+    assert not Path(document.file_path).is_absolute()
 
-    assert await asyncio.to_thread(file_path.exists)
-    content = await asyncio.to_thread(file_path.read_bytes)
-    assert content == b"Test document"
+    file_path = storage.get_path(document.file_path)
+
+    assert await storage.exists(document.file_path)
+    assert await storage.read(document.file_path) == b"Test document"
+
     assert body["workspace_id"] == str(workspace.id)
     assert body["filename"] == "report.txt"
     assert body["status"] == DocumentStatus.PROCESSED.value
@@ -77,7 +93,7 @@ async def test_upload_document(
     ai_service_mock.ingest_document.assert_awaited_once_with(
         document_id=uuid.UUID(body["id"]),
         workspace_id=workspace.id,
-        file_path=document.file_path,
+        file_path=file_path,
         filename=document.filename,
     )
 
@@ -86,10 +102,8 @@ async def test_upload_document_ingestion_error(
     client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
 
@@ -120,17 +134,20 @@ async def test_upload_document_ingestion_error(
 
     result = await db_session.execute(select(Document).where(Document.workspace_id == workspace.id))
     document = result.scalar_one()
+
     assert document.status == DocumentStatus.FAILED
+    assert document.file_path.startswith("documents/")
+    assert not Path(document.file_path).is_absolute()
 
-    file_path = Path(document.file_path)
+    file_path = storage.get_path(document.file_path)
 
-    assert await asyncio.to_thread(file_path.exists)
-    content = await asyncio.to_thread(file_path.read_bytes)
-    assert content == b"Test document"
+    assert await storage.exists(document.file_path)
+    assert await storage.read(document.file_path) == b"Test document"
+
     ai_service_mock.ingest_document.assert_awaited_once_with(
         document_id=document.id,
         workspace_id=workspace.id,
-        file_path=document.file_path,
+        file_path=file_path,
         filename=document.filename,
     )
 
@@ -139,15 +156,14 @@ async def test_upload_document_refresh_error(
     client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
     rollback_mock = AsyncMock(wraps=db_session.rollback)
     monkeypatch.setattr(db_session, "rollback", rollback_mock)
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
 
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
-
+    workspace_id = workspace.id
     login = await client.post(
         "/api/v1/login",
         data={"username": user.email, "password": PASSWORD},
@@ -159,13 +175,18 @@ async def test_upload_document_refresh_error(
 
     with pytest.raises(RuntimeError, match="Database refresh failed"):
         await client.post(
-            f"/api/v1/workspaces/{workspace.id}/documents",
+            f"/api/v1/workspaces/{workspace_id}/documents",
             headers={"Authorization": f"Bearer {access_token}"},
             files={"file": ("test.txt", b"test content", "text/plain")},
         )
 
-    files = await asyncio.to_thread(lambda: list(tmp_path.iterdir()))
-    assert files == []
+    result = await db_session.execute(select(Document).where(Document.workspace_id == workspace_id))
+
+    assert result.scalar_one_or_none() is None
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
+
     rollback_mock.assert_awaited_once()
     refresh_mock.assert_awaited_once()
 
@@ -222,13 +243,11 @@ async def test_upload_document_workspace_not_found(
 async def test_upload_document_file_too_large(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -240,7 +259,7 @@ async def test_upload_document_file_too_large(
     large_content = b"x" * (10 * 1024 * 1024 + 1)
 
     response = await client.post(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers=headers,
         files={"file": ("large.txt", BytesIO(large_content), "text/plain")},
     )
@@ -248,20 +267,21 @@ async def test_upload_document_file_too_large(
     assert response.status_code == 413
     assert response.json()["detail"] == ("File size exceeds the maximum allowed size of 10 MB")
 
-    files = await asyncio.to_thread(lambda: list(tmp_path.iterdir()))
-    assert files == []
+    result = await db_session.execute(select(Document).where(Document.workspace_id == workspace_id))
+    assert result.scalar_one_or_none() is None
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
 
 
 async def test_list_documents(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -271,14 +291,14 @@ async def test_list_documents(
     headers = {"Authorization": f"Bearer {access_token}"}
 
     upload_response = await client.post(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers=headers,
         files={"file": ("report.txt", BytesIO(b"Test document"), "text/plain")},
     )
     assert upload_response.status_code == 201
 
     response = await client.get(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers=headers,
     )
 
@@ -287,9 +307,15 @@ async def test_list_documents(
 
     assert len(body) == 1
     assert body[0]["filename"] == "report.txt"
-    assert body[0]["workspace_id"] == str(workspace.id)
+    assert body[0]["workspace_id"] == str(workspace_id)
     assert body[0]["status"] == DocumentStatus.PROCESSED.value
-    assert "file_path" not in body[0]
+
+    document_id = uuid.UUID(body[0]["id"])
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one()
+
+    assert await storage.exists(document.file_path)
+    assert await storage.read(document.file_path) == b"Test document"
 
 
 async def test_list_documents_database_error(
@@ -321,13 +347,11 @@ async def test_list_documents_database_error(
 async def test_delete_document(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -337,19 +361,23 @@ async def test_delete_document(
     headers = {"Authorization": f"Bearer {access_token}"}
 
     upload_response = await client.post(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers=headers,
         files={"file": ("report.txt", BytesIO(b"Test document"), "text/plain")},
     )
     assert upload_response.status_code == 201
 
-    document_id = upload_response.json()["id"]
+    document_id = uuid.UUID(upload_response.json()["id"])
 
-    result = await db_session.execute(select(Document).where(Document.id == uuid.UUID(document_id)))
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
     document = result.scalar_one()
-    file_path = Path(document.file_path)
 
-    assert await asyncio.to_thread(file_path.exists)
+    storage_key = document.file_path
+
+    assert storage_key.startswith("documents/")
+    assert not Path(storage_key).is_absolute()
+    assert await storage.exists(storage_key)
+    assert await storage.read(storage_key) == b"Test document"
 
     response = await client.delete(
         f"/api/v1/documents/{document_id}",
@@ -357,9 +385,9 @@ async def test_delete_document(
     )
 
     assert response.status_code == 204
-    assert not await asyncio.to_thread(file_path.exists)
+    assert not await storage.exists(storage_key)
 
-    result = await db_session.execute(select(Document).where(Document.id == uuid.UUID(document_id)))
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
     assert result.scalar_one_or_none() is None
 
 
@@ -390,11 +418,8 @@ async def test_delete_document_not_found(
 async def test_delete_document_from_another_users_workspace(
     client: AsyncClient,
     db_session: AsyncSession,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     owner = await create_user(db_session)
     other_user = await create_user(
         db_session,
@@ -405,6 +430,7 @@ async def test_delete_document_from_another_users_workspace(
         db_session,
         owner_id=owner.id,
     )
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -413,11 +439,19 @@ async def test_delete_document_from_another_users_workspace(
     token = login.json()["access_token"]
 
     upload = await client.post(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("test.txt", b"test content", "text/plain")},
     )
-    document_id = upload.json()["id"]
+    assert upload.status_code == 201
+
+    document_id = uuid.UUID(upload.json()["id"])
+
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one()
+    storage_key = document.file_path
+
+    assert await storage.exists(storage_key)
 
     other_login = await client.post(
         "/api/v1/login",
@@ -432,19 +466,24 @@ async def test_delete_document_from_another_users_workspace(
 
     assert response.status_code == 404
 
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
+    assert result.scalar_one_or_none() is not None
+
+    assert await storage.exists(storage_key)
+
 
 async def test_upload_document_commit_error(
     client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
     rollback_mock = AsyncMock(wraps=db_session.rollback)
     monkeypatch.setattr(db_session, "rollback", rollback_mock)
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
 
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -459,13 +498,17 @@ async def test_upload_document_commit_error(
 
     with pytest.raises(RuntimeError, match="Database commit failed"):
         await client.post(
-            f"/api/v1/workspaces/{workspace.id}/documents",
+            f"/api/v1/workspaces/{workspace_id}/documents",
             headers={"Authorization": f"Bearer {access_token}"},
             files={"file": ("test.txt", b"test content", "text/plain")},
         )
 
-    files = await asyncio.to_thread(lambda: list(tmp_path.iterdir()))
-    assert files == []
+    result = await db_session.execute(select(Document).where(Document.workspace_id == workspace_id))
+    assert result.scalar_one_or_none() is None
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
+
     rollback_mock.assert_awaited_once()
 
 
@@ -473,12 +516,11 @@ async def test_delete_document_commit_error(
     client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -487,16 +529,23 @@ async def test_delete_document_commit_error(
     access_token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access_token}"}
 
+    original_content = b"Test document"
+
     upload_response = await client.post(
-        f"/api/v1/workspaces/{workspace.id}/documents",
+        f"/api/v1/workspaces/{workspace_id}/documents",
         headers=headers,
-        files={"file": ("report.txt", BytesIO(b"Test document"), "text/plain")},
+        files={"file": ("report.txt", BytesIO(original_content), "text/plain")},
     )
     assert upload_response.status_code == 201
 
-    document_id = upload_response.json()["id"]
-    files = await asyncio.to_thread(lambda: list(tmp_path.iterdir()))
-    file_path = files[0]
+    document_id = uuid.UUID(upload_response.json()["id"])
+
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one()
+    storage_key = document.file_path
+
+    assert await storage.exists(storage_key)
+    assert await storage.read(storage_key) == original_content
 
     rollback_mock = AsyncMock(wraps=db_session.rollback)
     monkeypatch.setattr(db_session, "rollback", rollback_mock)
@@ -512,20 +561,24 @@ async def test_delete_document_commit_error(
             headers=headers,
         )
 
-    assert file_path.exists()
+    assert await storage.exists(storage_key)
+    assert await storage.read(storage_key) == original_content
+
     rollback_mock.assert_awaited_once()
+
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
+    assert result.scalar_one_or_none() is not None
 
 
 async def test_upload_document_storage_error(
     client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
-    monkeypatch.setattr("app.storage.local.settings.uploads_dir", tmp_path)
-
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
 
     login = await client.post(
         "/api/v1/login",
@@ -533,23 +586,23 @@ async def test_upload_document_storage_error(
     )
     access_token = login.json()["access_token"]
 
-    async def failing_save_file(file: UploadFile) -> NoReturn:
+    async def failing_save(key: str, data: bytes) -> None:
         raise OSError("Disk write failed")
 
-    monkeypatch.setattr(
-        "app.services.document.save_file",
-        failing_save_file,
-    )
+    monkeypatch.setattr(storage, "save", failing_save)
 
     with pytest.raises(OSError, match="Disk write failed"):
         await client.post(
-            f"/api/v1/workspaces/{workspace.id}/documents",
+            f"/api/v1/workspaces/{workspace_id}/documents",
             headers={"Authorization": f"Bearer {access_token}"},
             files={"file": ("report.txt", b"Test document", "text/plain")},
         )
 
-    files = await asyncio.to_thread(lambda: list(tmp_path.iterdir()))
-    assert files == []
+    result = await db_session.execute(select(Document).where(Document.workspace_id == workspace_id))
+    assert result.scalar_one_or_none() is None
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
 
 
 async def test_list_documents_empty(
@@ -632,21 +685,27 @@ async def test_upload_document_to_another_users_workspace(
 async def test_delete_document_when_file_missing(
     client: AsyncClient,
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    storage: LocalStorage,
 ) -> None:
     user = await create_user(db_session)
     workspace = await create_workspace(db_session, owner_id=user.id)
+    workspace_id = workspace.id
+
+    storage_key = "documents/missing.txt"
 
     document = Document(
-        workspace_id=workspace.id,
+        workspace_id=workspace_id,
         filename="missing.txt",
-        file_path=str(tmp_path / "missing.txt"),
+        file_path=storage_key,
         status=DocumentStatus.PENDING,
     )
     db_session.add(document)
     await db_session.commit()
     await db_session.refresh(document)
+
+    document_id = document.id
+
+    assert not await storage.exists(storage_key)
 
     login = await client.post(
         "/api/v1/login",
@@ -655,11 +714,13 @@ async def test_delete_document_when_file_missing(
     access_token = login.json()["access_token"]
 
     response = await client.delete(
-        f"/api/v1/documents/{document.id}",
+        f"/api/v1/documents/{document_id}",
         headers={"Authorization": f"Bearer {access_token}"},
     )
 
     assert response.status_code == 204
 
-    result = await db_session.execute(select(Document).where(Document.id == document.id))
+    result = await db_session.execute(select(Document).where(Document.id == document_id))
     assert result.scalar_one_or_none() is None
+
+    assert not await storage.exists(storage_key)

@@ -17,12 +17,15 @@ from app.core.errors import (
 )
 from app.models.document import Document, DocumentStatus
 from app.services.ai import AIService
-from app.storage.local import FileTooLargeError as StorageFileTooLargeError
+from app.services.storage import LocalStorage, StorageBackend
 
 
 def make_session() -> MagicMock:
     session = MagicMock()
     session.add = MagicMock()
+    session.execute = AsyncMock()
+    session.delete = AsyncMock()
+    session.flush = AsyncMock()
     session.commit = AsyncMock()
     session.refresh = AsyncMock()
     session.rollback = AsyncMock()
@@ -46,24 +49,23 @@ def session() -> MagicMock:
     return make_session()
 
 
+@pytest.fixture
+def storage(tmp_path: Path) -> StorageBackend:
+    return LocalStorage(tmp_path)
+
+
 async def test_create_document_success(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
+    storage: StorageBackend,
 ) -> None:
     file = make_file()
-    file_path = tmp_path / "report.txt"
 
     monkeypatch.setattr(
         document_service,
         "get_workspace",
         AsyncMock(return_value=workspace),
-    )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=file_path),
     )
 
     ai_service = MagicMock()
@@ -74,14 +76,29 @@ async def test_create_document_success(
         workspace_id=workspace.id,
         user_id=uuid.uuid4(),
         ai_service=cast(AIService, ai_service),
+        storage=storage,
         file=file,
     )
 
     assert document.status == DocumentStatus.PROCESSED
-    session.add.assert_called_once()
+    assert document.file_path.startswith("documents/")
+    assert document.file_path.endswith(".txt")
+
+    stored_path = storage.get_path(document.file_path)
+
+    assert stored_path.is_file()
+    assert stored_path.read_bytes() == b"Test document"
+
+    session.add.assert_called_once_with(document)
     assert session.commit.await_count == 2
     assert session.refresh.await_count == 2
+
     ai_service.ingest_document.assert_awaited_once()
+
+    ai_call = ai_service.ingest_document.await_args.kwargs
+    assert ai_call["file_path"] == stored_path
+    assert ai_call["filename"] == "report.txt"
+
     assert file.file.closed
 
 
@@ -89,24 +106,15 @@ async def test_create_document_ingestion_error(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
+    storage: StorageBackend,
 ) -> None:
     file = make_file()
-    file_path = tmp_path / "report.txt"
 
     monkeypatch.setattr(
         document_service,
         "get_workspace",
         AsyncMock(return_value=workspace),
     )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=file_path),
-    )
-
-    delete_mock = MagicMock()
-    monkeypatch.setattr(document_service, "delete_file", delete_mock)
 
     ai_service = MagicMock()
     ai_service.ingest_document = AsyncMock(side_effect=RuntimeError("Ingestion failed"))
@@ -117,6 +125,7 @@ async def test_create_document_ingestion_error(
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
             ai_service=cast(AIService, ai_service),
+            storage=storage,
             file=file,
         )
 
@@ -124,10 +133,20 @@ async def test_create_document_ingestion_error(
 
     assert isinstance(document, Document)
     assert document.status == DocumentStatus.FAILED
+    assert document.file_path.startswith("documents/")
+
+    stored_path = storage.get_path(document.file_path)
+
+    assert await storage.exists(document.file_path)
+    assert await storage.read(document.file_path) == b"Test document"
+
     assert session.commit.await_count == 2
     assert session.refresh.await_count == 2
     session.rollback.assert_not_awaited()
-    delete_mock.assert_not_called()
+
+    ai_service.ingest_document.assert_awaited_once()
+    assert ai_service.ingest_document.await_args.kwargs["file_path"] == stored_path
+
     assert file.file.closed
 
 
@@ -135,6 +154,7 @@ async def test_create_document_unsupported_file_type(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
+    storage: StorageBackend,
 ) -> None:
     file = make_file("report.exe")
 
@@ -145,7 +165,7 @@ async def test_create_document_unsupported_file_type(
     )
 
     save_mock = AsyncMock()
-    monkeypatch.setattr(document_service, "save_file", save_mock)
+    monkeypatch.setattr(storage, "save", save_mock)
 
     with pytest.raises(UnsupportedFileTypeError):
         await document_service.create_document(
@@ -153,6 +173,7 @@ async def test_create_document_unsupported_file_type(
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
             ai_service=cast(AIService, MagicMock()),
+            storage=storage,
             file=file,
         )
 
@@ -166,24 +187,15 @@ async def test_create_document_commit_error_deletes_file(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
+    storage: StorageBackend,
 ) -> None:
     file = make_file()
-    file_path = tmp_path / "report.txt"
 
     monkeypatch.setattr(
         document_service,
         "get_workspace",
         AsyncMock(return_value=workspace),
     )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=file_path),
-    )
-
-    delete_mock = MagicMock()
-    monkeypatch.setattr(document_service, "delete_file", delete_mock)
 
     session.commit.side_effect = RuntimeError("Database error")
 
@@ -193,11 +205,19 @@ async def test_create_document_commit_error_deletes_file(
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
             ai_service=cast(AIService, MagicMock()),
+            storage=storage,
             file=file,
         )
 
+    session.add.assert_called_once()
+    session.flush.assert_awaited_once()
+    session.refresh.assert_awaited_once()
+    session.commit.assert_awaited_once()
     session.rollback.assert_awaited_once()
-    delete_mock.assert_called_once_with(file_path)
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
+
     assert file.file.closed
 
 
@@ -205,6 +225,7 @@ async def test_create_document_file_too_large(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
+    storage: StorageBackend,
 ) -> None:
     file = make_file()
 
@@ -213,10 +234,13 @@ async def test_create_document_file_too_large(
         "get_workspace",
         AsyncMock(return_value=workspace),
     )
+
     monkeypatch.setattr(
         document_service,
-        "save_file",
-        AsyncMock(side_effect=StorageFileTooLargeError()),
+        "_read_upload",
+        AsyncMock(
+            side_effect=FileTooLargeError("File size exceeds the maximum allowed size of 10 MB")
+        ),
     )
 
     with pytest.raises(FileTooLargeError):
@@ -225,11 +249,17 @@ async def test_create_document_file_too_large(
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
             ai_service=cast(AIService, MagicMock()),
+            storage=storage,
             file=file,
         )
 
     session.add.assert_not_called()
+    session.flush.assert_not_awaited()
     session.commit.assert_not_awaited()
+
+    documents_dir = storage.get_path("documents")
+    assert not documents_dir.exists() or not any(documents_dir.iterdir())
+
     assert file.file.closed
 
 
@@ -237,7 +267,7 @@ async def test_create_document_failed_status_commit_error(
     monkeypatch: pytest.MonkeyPatch,
     workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
+    storage: StorageBackend,
 ) -> None:
     file = make_file()
 
@@ -245,11 +275,6 @@ async def test_create_document_failed_status_commit_error(
         document_service,
         "get_workspace",
         AsyncMock(return_value=workspace),
-    )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=tmp_path / "report.txt"),
     )
 
     ai_service = MagicMock()
@@ -266,14 +291,23 @@ async def test_create_document_failed_status_commit_error(
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
             ai_service=cast(AIService, ai_service),
+            storage=storage,
             file=file,
         )
 
     document = session.add.call_args.args[0]
 
     assert document.status == DocumentStatus.FAILED
+    assert document.file_path.startswith("documents/")
+
+    assert session.flush.await_count == 1
     assert session.commit.await_count == 2
     session.rollback.assert_awaited_once()
+
+    assert await storage.exists(document.file_path)
+    assert await storage.read(document.file_path) == b"Test document"
+
+    ai_service.ingest_document.assert_awaited_once()
     assert file.file.closed
 
 
@@ -336,42 +370,37 @@ async def test_get_documents_success(
     assert session.execute.await_count == 2
 
 
-async def test_delete_document_success(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_delete_document_removes_database_record_and_file(
+    session: MagicMock,
+    storage: StorageBackend,
 ) -> None:
-    session = MagicMock()
-    session.execute = AsyncMock()
+    storage_key = "documents/test-document.txt"
+    await storage.save(storage_key, b"Test document")
 
-    document = Document(
-        workspace_id=uuid.uuid4(),
-        filename="report.txt",
-        file_path="uploads/report.txt",
-        status=DocumentStatus.PROCESSED,
-    )
+    document = MagicMock(spec=Document)
+    document.id = uuid.uuid4()
+    document.file_path = storage_key
 
     result = MagicMock()
     result.scalar_one_or_none.return_value = document
     session.execute.return_value = result
-    session.delete = AsyncMock()
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-
-    delete_file_mock = MagicMock()
-    monkeypatch.setattr(document_service, "delete_file", delete_file_mock)
 
     await document_service.delete_document(
         session=cast(AsyncSession, session),
-        document_id=uuid.uuid4(),
+        document_id=document.id,
         user_id=uuid.uuid4(),
+        storage=storage,
     )
 
+    assert not await storage.exists(storage_key)
     session.delete.assert_awaited_once_with(document)
     session.commit.assert_awaited_once()
     session.rollback.assert_not_awaited()
-    delete_file_mock.assert_called_once_with(Path(document.file_path))
 
 
-async def test_delete_document_not_found() -> None:
+async def test_delete_document_not_found(
+    storage: StorageBackend,
+) -> None:
     session = MagicMock()
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
@@ -384,6 +413,7 @@ async def test_delete_document_not_found() -> None:
             session=cast(AsyncSession, session),
             document_id=uuid.uuid4(),
             user_id=uuid.uuid4(),
+            storage=storage,
         )
 
     session.delete.assert_not_awaited()
@@ -391,14 +421,17 @@ async def test_delete_document_not_found() -> None:
 
 
 async def test_delete_document_commit_error(
-    monkeypatch: pytest.MonkeyPatch,
+    storage: StorageBackend,
 ) -> None:
     session = MagicMock()
+
+    storage_key = "documents/report.txt"
+    await storage.save(storage_key, b"Test document")
 
     document = Document(
         workspace_id=uuid.uuid4(),
         filename="report.txt",
-        file_path="uploads/report.txt",
+        file_path=storage_key,
         status=DocumentStatus.PROCESSED,
     )
 
@@ -409,16 +442,205 @@ async def test_delete_document_commit_error(
     session.commit = AsyncMock(side_effect=RuntimeError("Database error"))
     session.rollback = AsyncMock()
 
-    delete_file_mock = MagicMock()
-    monkeypatch.setattr(document_service, "delete_file", delete_file_mock)
-
     with pytest.raises(RuntimeError, match="Database error"):
         await document_service.delete_document(
             session=cast(AsyncSession, session),
             document_id=uuid.uuid4(),
             user_id=uuid.uuid4(),
+            storage=storage,
+        )
+
+    session.delete.assert_awaited_once_with(document)
+    session.commit.assert_awaited_once()
+    session.rollback.assert_awaited_once()
+
+    assert await storage.exists(storage_key)
+    assert await storage.read(storage_key) == b"Test document"
+
+
+async def test_delete_document_when_file_is_missing(
+    session: MagicMock,
+    storage: StorageBackend,
+) -> None:
+    storage_key = "documents/missing.txt"
+
+    document = MagicMock(spec=Document)
+    document.id = uuid.uuid4()
+    document.file_path = storage_key
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = document
+    session.execute.return_value = result
+
+    assert not await storage.exists(storage_key)
+
+    await document_service.delete_document(
+        session=cast(AsyncSession, session),
+        document_id=document.id,
+        user_id=uuid.uuid4(),
+        storage=storage,
+    )
+
+    assert not await storage.exists(storage_key)
+    session.delete.assert_awaited_once_with(document)
+    session.commit.assert_awaited_once()
+    session.rollback.assert_not_awaited()
+
+
+async def test_delete_document_restores_file_on_database_error(
+    session: MagicMock,
+    storage: StorageBackend,
+) -> None:
+    storage_key = "documents/restore.txt"
+    original_content = b"Important document"
+
+    await storage.save(storage_key, original_content)
+
+    document = MagicMock(spec=Document)
+    document.id = uuid.uuid4()
+    document.file_path = storage_key
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = document
+    session.execute.return_value = result
+
+    session.commit.side_effect = RuntimeError("Database error")
+
+    with pytest.raises(RuntimeError, match="Database error"):
+        await document_service.delete_document(
+            session=cast(AsyncSession, session),
+            document_id=document.id,
+            user_id=uuid.uuid4(),
+            storage=storage,
         )
 
     session.delete.assert_awaited_once_with(document)
     session.rollback.assert_awaited_once()
-    delete_file_mock.assert_not_called()
+
+    assert await storage.exists(storage_key)
+    assert await storage.read(storage_key) == original_content
+
+
+async def test_delete_document_storage_error(
+    session: MagicMock,
+    storage: StorageBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage_key = "documents/delete-error.txt"
+    await storage.save(storage_key, b"Test document")
+
+    document = MagicMock(spec=Document)
+    document.id = uuid.uuid4()
+    document.file_path = storage_key
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = document
+    session.execute.return_value = result
+
+    delete_mock = AsyncMock(side_effect=RuntimeError("Storage delete failed"))
+    monkeypatch.setattr(storage, "delete", delete_mock)
+
+    with pytest.raises(RuntimeError, match="Storage delete failed"):
+        await document_service.delete_document(
+            session=cast(AsyncSession, session),
+            document_id=document.id,
+            user_id=uuid.uuid4(),
+            storage=storage,
+        )
+
+    delete_mock.assert_awaited_once_with(storage_key)
+    session.delete.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+    assert await storage.exists(storage_key)
+
+
+async def test_create_document_database_error_cleans_up_file(
+    monkeypatch: pytest.MonkeyPatch,
+    workspace: MagicMock,
+    session: MagicMock,
+    storage: StorageBackend,
+) -> None:
+    file = make_file()
+
+    monkeypatch.setattr(
+        document_service,
+        "get_workspace",
+        AsyncMock(return_value=workspace),
+    )
+
+    session.commit.side_effect = RuntimeError("Database error")
+
+    ai_service = MagicMock()
+    ai_service.ingest_document = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="Database error"):
+        await document_service.create_document(
+            session=cast(AsyncSession, session),
+            workspace_id=workspace.id,
+            user_id=uuid.uuid4(),
+            ai_service=cast(AIService, ai_service),
+            storage=storage,
+            file=file,
+        )
+
+    document = session.add.call_args.args[0]
+    storage_key = document.file_path
+
+    assert storage_key.startswith("documents/")
+    assert not await storage.exists(storage_key)
+
+    session.rollback.assert_awaited_once()
+    session.commit.assert_awaited_once()
+    session.flush.assert_awaited_once()
+    session.refresh.assert_awaited_once()
+
+    ai_service.ingest_document.assert_not_awaited()
+    assert file.file.closed
+
+
+async def test_create_document_storage_error_cleans_up_file(
+    monkeypatch: pytest.MonkeyPatch,
+    workspace: MagicMock,
+    session: MagicMock,
+    storage: StorageBackend,
+) -> None:
+    file = make_file()
+    saved_keys: list[str] = []
+
+    monkeypatch.setattr(
+        document_service,
+        "get_workspace",
+        AsyncMock(return_value=workspace),
+    )
+
+    original_save = storage.save
+
+    async def failing_save(key: str, data: bytes) -> None:
+        saved_keys.append(key)
+        await original_save(key, data)
+        raise RuntimeError("Storage write failed")
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    ai_service = MagicMock()
+    ai_service.ingest_document = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="Storage write failed"):
+        await document_service.create_document(
+            session=cast(AsyncSession, session),
+            workspace_id=workspace.id,
+            user_id=uuid.uuid4(),
+            ai_service=cast(AIService, ai_service),
+            storage=storage,
+            file=file,
+        )
+
+    assert len(saved_keys) == 1
+    assert not await storage.exists(saved_keys[0])
+
+    session.add.assert_not_called()
+    session.commit.assert_not_awaited()
+    ai_service.ingest_document.assert_not_awaited()
+
+    assert file.file.closed
