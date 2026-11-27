@@ -15,8 +15,7 @@ from app.core.errors import (
 )
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
-from app.services.ai import AIService
-from app.services.ai.stub import SUPPORTED_EXTENSIONS
+from app.services.ai import SUPPORTED_EXTENSIONS, AIService
 from app.services.storage import StorageBackend
 
 logger = logging.getLogger(__name__)
@@ -45,7 +44,6 @@ async def create_document(
     storage: StorageBackend,
     file: UploadFile,
 ) -> Document:
-
     try:
         workspace = await get_workspace(
             session=session,
