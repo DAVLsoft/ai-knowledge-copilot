@@ -49,6 +49,7 @@ class Document(TimestampMixin, Base):
         server_default=DocumentStatus.PENDING.value,
         nullable=False,
     )
+    failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     workspace: Mapped["Workspace"] = relationship(
         back_populates="documents",

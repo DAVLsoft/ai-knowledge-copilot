@@ -13,5 +13,6 @@ class DocumentRead(BaseModel):
     workspace_id: uuid.UUID
     filename: str
     status: DocumentStatus
+    failure_reason: str | None = None
     created_at: datetime
     updated_at: datetime

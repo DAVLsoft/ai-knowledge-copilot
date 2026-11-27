@@ -17,6 +17,7 @@ from app.core.errors import (
 )
 from app.models.document import Document, DocumentStatus
 from app.services.ai import AIService
+from app.services.ai.exceptions import DocumentParsingError
 from app.storage.local import FileTooLargeError as StorageFileTooLargeError
 
 
@@ -66,69 +67,61 @@ async def test_create_document_success(
         AsyncMock(return_value=file_path),
     )
 
-    ai_service = MagicMock()
-    ai_service.ingest_document = AsyncMock()
-
     document = await document_service.create_document(
         session=cast(AsyncSession, session),
         workspace_id=workspace.id,
         user_id=uuid.uuid4(),
-        ai_service=cast(AIService, ai_service),
         file=file,
     )
 
-    assert document.status == DocumentStatus.PROCESSED
+    assert document.status == DocumentStatus.PENDING
     session.add.assert_called_once()
-    assert session.commit.await_count == 2
-    assert session.refresh.await_count == 2
-    ai_service.ingest_document.assert_awaited_once()
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(document)
     assert file.file.closed
 
 
-async def test_create_document_ingestion_error(
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (DocumentParsingError("PDF is password-protected"), "PDF is password-protected"),
+        (RuntimeError("Internal details"), "Document processing failed"),
+        (None, None),
+    ],
+)
+async def test_process_document(
     monkeypatch: pytest.MonkeyPatch,
-    workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
+    error: Exception | None,
+    reason: str | None,
 ) -> None:
-    file = make_file()
-    file_path = tmp_path / "report.txt"
-
-    monkeypatch.setattr(
-        document_service,
-        "get_workspace",
-        AsyncMock(return_value=workspace),
+    document = Document(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        filename="report.pdf",
+        file_path="uploads/report.pdf",
+        status=DocumentStatus.PENDING,
     )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=file_path),
-    )
-
-    delete_mock = MagicMock()
-    monkeypatch.setattr(document_service, "delete_file", delete_mock)
-
+    session.get = AsyncMock(return_value=document)
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = session
+    monkeypatch.setattr(document_service, "SessionLocal", MagicMock(return_value=session_context))
     ai_service = MagicMock()
-    ai_service.ingest_document = AsyncMock(side_effect=RuntimeError("Ingestion failed"))
+    ai_service.ingest_document = AsyncMock(side_effect=error)
 
-    with pytest.raises(RuntimeError, match="Ingestion failed"):
-        await document_service.create_document(
-            session=cast(AsyncSession, session),
-            workspace_id=workspace.id,
-            user_id=uuid.uuid4(),
-            ai_service=cast(AIService, ai_service),
-            file=file,
-        )
+    await document_service.process_document(document.id, cast(AIService, ai_service))
 
-    document = session.add.call_args.args[0]
-
-    assert isinstance(document, Document)
-    assert document.status == DocumentStatus.FAILED
-    assert session.commit.await_count == 2
-    assert session.refresh.await_count == 2
-    session.rollback.assert_not_awaited()
-    delete_mock.assert_not_called()
-    assert file.file.closed
+    session.get.assert_awaited_once_with(Document, document.id)
+    ai_service.ingest_document.assert_awaited_once_with(
+        document_id=document.id,
+        workspace_id=document.workspace_id,
+        file_path=document.file_path,
+        filename=document.filename,
+    )
+    assert document.status == (DocumentStatus.FAILED if error else DocumentStatus.PROCESSED)
+    assert document.failure_reason == reason
+    session.commit.assert_awaited_once()
+    session_context.__aexit__.assert_awaited_once()
 
 
 async def test_create_document_unsupported_file_type(
@@ -152,7 +145,6 @@ async def test_create_document_unsupported_file_type(
             session=cast(AsyncSession, session),
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
-            ai_service=cast(AIService, MagicMock()),
             file=file,
         )
 
@@ -192,7 +184,6 @@ async def test_create_document_commit_error_deletes_file(
             session=cast(AsyncSession, session),
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
-            ai_service=cast(AIService, MagicMock()),
             file=file,
         )
 
@@ -224,7 +215,6 @@ async def test_create_document_file_too_large(
             session=cast(AsyncSession, session),
             workspace_id=workspace.id,
             user_id=uuid.uuid4(),
-            ai_service=cast(AIService, MagicMock()),
             file=file,
         )
 
@@ -233,48 +223,30 @@ async def test_create_document_file_too_large(
     assert file.file.closed
 
 
-async def test_create_document_failed_status_commit_error(
+async def test_ingest_document_failed_status_commit_error(
     monkeypatch: pytest.MonkeyPatch,
-    workspace: MagicMock,
     session: MagicMock,
-    tmp_path: Path,
 ) -> None:
-    file = make_file()
-
-    monkeypatch.setattr(
-        document_service,
-        "get_workspace",
-        AsyncMock(return_value=workspace),
+    document = Document(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        filename="report.txt",
+        file_path="uploads/report.txt",
+        status=DocumentStatus.PENDING,
     )
-    monkeypatch.setattr(
-        document_service,
-        "save_file",
-        AsyncMock(return_value=tmp_path / "report.txt"),
-    )
-
     ai_service = MagicMock()
     ai_service.ingest_document = AsyncMock(side_effect=RuntimeError("Ingestion failed"))
+    session.commit.side_effect = RuntimeError("Status update failed")
+    session.get = AsyncMock(return_value=document)
+    session_context = MagicMock()
+    session_context.__aenter__.return_value = session
+    monkeypatch.setattr(document_service, "SessionLocal", MagicMock(return_value=session_context))
 
-    session.commit.side_effect = [
-        None,
-        RuntimeError("Status update failed"),
-    ]
+    with pytest.raises(RuntimeError, match="Status update failed"):
+        await document_service.process_document(document.id, cast(AIService, ai_service))
 
-    with pytest.raises(RuntimeError, match="Ingestion failed"):
-        await document_service.create_document(
-            session=cast(AsyncSession, session),
-            workspace_id=workspace.id,
-            user_id=uuid.uuid4(),
-            ai_service=cast(AIService, ai_service),
-            file=file,
-        )
-
-    document = session.add.call_args.args[0]
-
-    assert document.status == DocumentStatus.FAILED
-    assert session.commit.await_count == 2
+    session.commit.assert_awaited_once()
     session.rollback.assert_awaited_once()
-    assert file.file.closed
 
 
 async def test_get_workspace_success(
