@@ -7,14 +7,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
+    ConflictError,
     DocumentNotFoundError,
     FileTooLargeError,
     UnsupportedFileTypeError,
     WorkspaceNotFoundError,
 )
+from app.db.session import SessionLocal
 from app.models.document import Document, DocumentStatus
 from app.models.workspace import Workspace
 from app.services.ai import SUPPORTED_EXTENSIONS, AIService
+from app.services.ai.exceptions import DocumentParsingError
 from app.storage.local import (
     FileTooLargeError as StorageFileTooLargeError,
 )
@@ -30,7 +33,6 @@ async def create_document(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
-    ai_service: AIService,
     file: UploadFile,
 ) -> Document:
     try:
@@ -72,36 +74,77 @@ async def create_document(
             delete_file(file_path)
             raise
 
-        try:
-            await ai_service.ingest_document(
-                document_id=document.id,
-                workspace_id=document.workspace_id,
-                file_path=document.file_path,
-                filename=document.filename,
-            )
-        except Exception:
-            document.status = DocumentStatus.FAILED
-
-            try:
-                await session.commit()
-                await session.refresh(document)
-            except Exception:
-                await session.rollback()
-                logger.exception(
-                    "Failed to update document %s status to FAILED",
-                    document.id,
-                )
-
-            raise
-        else:
-            document.status = DocumentStatus.PROCESSED
-            await session.commit()
-            await session.refresh(document)
-
         return document
 
     finally:
         await file.close()
+
+
+async def process_document(document_id: uuid.UUID, ai_service: AIService) -> None:
+    async with SessionLocal() as session:
+        document = await session.get(Document, document_id)
+        if document is None or document.status != DocumentStatus.PENDING:
+            return
+        await _ingest_document(session, document, ai_service)
+
+
+async def _ingest_document(
+    session: AsyncSession,
+    document: Document,
+    ai_service: AIService,
+) -> None:
+    document_id = document.id
+    try:
+        await ai_service.ingest_document(
+            document_id=document_id,
+            workspace_id=document.workspace_id,
+            file_path=document.file_path,
+            filename=document.filename,
+        )
+    except Exception as exc:
+        logger.exception("Document ingestion failed for %s", document_id)
+        document.status = DocumentStatus.FAILED
+        document.failure_reason = "Document processing failed"
+        if isinstance(exc, DocumentParsingError):
+            document.failure_reason = str(exc)[:255]
+    else:
+        document.status = DocumentStatus.PROCESSED
+        document.failure_reason = None
+
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception("Failed to save ingestion result for document %s", document_id)
+        raise
+
+
+async def retry_document(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Document:
+    try:
+        document = await session.scalar(
+            select(Document)
+            .join(Workspace, Document.workspace_id == Workspace.id)
+            .where(Document.id == document_id, Workspace.owner_id == user_id)
+            .with_for_update(of=Document)
+        )
+        if document is None:
+            raise DocumentNotFoundError("Document not found")
+        if document.status != DocumentStatus.FAILED:
+            raise ConflictError("Only failed documents can be retried")
+
+        document.status = DocumentStatus.PENDING
+        document.failure_reason = None
+        await session.flush()
+        await session.refresh(document)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return document
 
 
 async def get_workspace(
